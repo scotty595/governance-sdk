@@ -316,13 +316,16 @@ flag mismatches. See `src/scorer-dimensions.ts` header comment and
 
 ### Injection Detection
 
-54 regex patterns across 7 categories (instruction override, role manipulation,
+56 regex patterns across 7 categories (instruction override, role manipulation,
 context escape, data exfiltration, encoding attack, social engineering,
 obfuscation). Input normalisation includes: zero-width character stripping,
-NFKC Unicode folding (fullwidth/compatibility variants → ASCII), leetspeak
-de-obfuscation (`1gn0r3 pr3v10us 1nstruct10ns` → `ignore previous
-instructions`), and Base64 decode-and-rescan. Scoring is max-pattern-weight
-+ multi-pattern and multi-category boosts, capped at 1.0.
+NFKC Unicode folding (fullwidth/compatibility variants → ASCII), Cyrillic/Greek
+confusable (homoglyph) folding (`systеm prоmpt` → `system prompt`),
+spaced-character collapsing (`i g n o r e` → `ignore`), markdown-emphasis
+stripping (`ig**no**re` → `ignore`), leetspeak de-obfuscation (`1gn0r3 pr3v10us
+1nstruct10ns` → `ignore previous instructions`), and Base64 decode-and-rescan.
+Scoring is max-pattern-weight + multi-pattern and multi-category boosts, capped
+at 1.0.
 
 ```typescript
 import { detectInjection } from 'governance-sdk/injection-detect';
@@ -715,7 +718,7 @@ governance-sdk/behavioral-scorer           behavioral signal adjustments
 governance-sdk/repo-patterns               repository capability detection
 
 # Injection detection
-governance-sdk/injection-detect            54-pattern regex detector
+governance-sdk/injection-detect            56-pattern regex detector
 governance-sdk/injection-classifier        pluggable ML classifier interface
 governance-sdk/injection-benchmark         LIB — 6.9K-sample benchmark runner
 

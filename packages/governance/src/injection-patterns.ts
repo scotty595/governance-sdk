@@ -356,6 +356,19 @@ export const BUILTIN_PATTERNS: InjectionPattern[] = [
     description: "Claims delegated access from parent agent",
   },
 
+  // ─── Agent-Worm Propagation ─────────────────────────────────────
+  // Self-propagating instructions that try to spread to OTHER agents.
+  // Key: require an explicit agent/conversation/session target so normal
+  // "forward this to all team members" stays benign.
+
+  {
+    id: "agent_worm_propagation",
+    category: "social_engineering",
+    pattern: /\b(?:(?:forward|send|relay|copy|broadcast|spread)\s+(?:this\s+)?(?:message|instruction|prompt|text|content)?\s*to\s+(?:(?:all|every|each|other|the\s+other)\s+)+(?:agents?|assistants?|bots?|models?|conversations?|sessions?|chats?|instances?)|(?:inject|replicate|propagate|embed)\s+(?:yourself|this)?\s*(?:into|across|to)\s+(?:(?:all|every|other|each)\s+)*(?:agents?|conversations?|sessions?|instances?)|all\s+(?:other\s+)?(?:agents?|assistants?)\s+(?:must|should|need\s+to|are\s+(?:to|required|instructed)))/i,
+    weight: 0.75,
+    description: "Self-propagating instruction targeting other agents (agent-worm)",
+  },
+
   // ─── Conditional/Temporal Triggers ──────────────────────────────
   // Instructions that activate on conditions.
 
@@ -376,6 +389,18 @@ export const BUILTIN_PATTERNS: InjectionPattern[] = [
     pattern: /\b(?:classify|label|mark|score|rate)\s+(?:this\s+)?(?:request|input|message|query)\s+as\s+(?:benign|safe|harmless|clean|non-malicious|legitimate)\b/i,
     weight: 0.7,
     description: "Attempts to manipulate the safety classifier's decision",
+  },
+
+  // ─── Tool-Call Forcing ──────────────────────────────────────────
+  // API-level tool/function selection controls smuggled into free-text
+  // input — never legitimate inside a user message.
+
+  {
+    id: "forced_tool_call",
+    category: "instruction_override",
+    pattern: /\b(?:tool[_\s-]?choice|function[_\s-]?call|force[_\s-]?(?:tool|function|call))\s*[:=]\s*["'{]?\s*(?:required|forced?|always|any|auto)\b/i,
+    weight: 0.6,
+    description: "Forces a specific tool/function invocation (API control in input)",
   },
 
   // ─── Extended patterns (obfuscation, etc.) ──────────────────────

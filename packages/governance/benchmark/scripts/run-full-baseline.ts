@@ -87,7 +87,7 @@ for (const [src, m] of entries) {
 
 const report = {
   generatedAt: new Date().toISOString(),
-  detector: "governance-sdk/injection-detect (regex, 54 patterns, 7 categories)",
+  detector: "governance-sdk/injection-detect (regex, 56 patterns, 7 categories)",
   dataset: "Lua Injection Benchmark (LIB) v1",
   totalSamples: samples.length,
   attacks: tp + fn,

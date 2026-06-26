@@ -60,15 +60,69 @@ export interface InjectionDetectorConfig {
 // ─── Detection Engine ───────────────────────────────────────────
 
 /**
- * Strip zero-width characters and normalize Unicode to NFKC (compatibility +
- * canonical) so fullwidth, circled, superscript, and similar evasions collapse
- * to their ASCII form before pattern matching.
+ * Strip zero-width characters, normalize Unicode to NFKC (compatibility +
+ * canonical), and fold Cyrillic/Greek confusables to Latin so fullwidth,
+ * circled, superscript, and homoglyph evasions collapse to their ASCII form
+ * before pattern matching.
  */
 function normalizeInput(input: string): string {
   // Remove zero-width characters (U+200B, U+200C, U+200D, U+FEFF, U+00AD, U+2060, U+180E)
   const stripped = input.replace(/[\u200B-\u200D\uFEFF\u00AD\u2060\u180E]/g, "");
   // NFKC folds compatibility variants (fullwidth `Ｉ` → `I`, superscripts → digits, etc.)
-  return stripped.normalize("NFKC");
+  const nfkc = stripped.normalize("NFKC");
+  // Fold confusables that NFKC leaves alone (Cyrillic/Greek lookalikes).
+  return nfkc.replace(CONFUSABLE_RE, (ch) => CONFUSABLES[ch] ?? ch);
+}
+
+/**
+ * Confusable (homoglyph) folding map: Unicode lookalikes → their Latin form.
+ * NFKC does NOT fold these (Cyrillic `а`, Greek `ο` are distinct codepoints,
+ * not compatibility variants), so an attack like `systеm prоmpt` (Cyrillic
+ * е/о) survives NFKC untouched. We map the common Cyrillic/Greek confusables
+ * back to Latin so they match the same patterns as their ASCII form. Targets
+ * are lowercase — all injection patterns are case-insensitive, so the case of
+ * the folded form is irrelevant.
+ */
+const CONFUSABLES: Record<string, string> = {
+  // Cyrillic → Latin
+  "а": "a", "е": "e", "о": "o", "р": "p", "с": "c",
+  "у": "y", "х": "x", "і": "i", "ѕ": "s", "ј": "j",
+  "к": "k", "м": "m", "н": "h", "в": "b", "т": "t",
+  "А": "a", "В": "b", "Е": "e", "К": "k", "М": "m",
+  "Н": "h", "О": "o", "Р": "p", "С": "c", "Т": "t",
+  "У": "y", "Х": "x", "І": "i", "Ј": "j",
+  // Greek → Latin
+  "ο": "o", "α": "a", "ε": "e", "ι": "i", "κ": "k",
+  "ν": "v", "ρ": "p", "τ": "t", "υ": "u", "χ": "x",
+  "Α": "a", "Β": "b", "Ε": "e", "Η": "h", "Ι": "i",
+  "Κ": "k", "Μ": "m", "Ν": "n", "Ο": "o", "Ρ": "p",
+  "Τ": "t", "Υ": "y", "Χ": "x",
+};
+
+const CONFUSABLE_RE = new RegExp(`[${Object.keys(CONFUSABLES).join("")}]`, "g");
+
+/**
+ * Collapse runs of single characters separated by a single space or separator
+ * (`. _ -`) back into a word, so spaced-out evasions like `i g n o r e` or
+ * `i.g.n.o.r.e` match the same patterns as the contiguous form. Only runs of
+ * 4+ single chars are collapsed (a first char plus 3+ separated chars), so
+ * benign initials/acronyms ("U S A", "I am a") are left intact. Multi-space
+ * gaps between words are preserved as word boundaries.
+ */
+export function collapseSpacedChars(input: string): string {
+  return input.replace(
+    /[A-Za-z0-9](?:[ \t._-][A-Za-z0-9]){3,}/g,
+    (run) => run.replace(/[ \t._-]/g, ""),
+  );
+}
+
+/**
+ * Remove markdown emphasis/code markers that attackers insert mid-word to
+ * break keyword matching (e.g. `ig**no**re`). Only the markers are stripped,
+ * so `ig**no**re previous` folds back to `ignore previous`.
+ */
+export function stripMarkdownEmphasis(input: string): string {
+  return input.replace(/[*_~`]/g, "");
 }
 
 /**
@@ -157,25 +211,48 @@ export function detectInjection(
   ].filter((p) => !skipCategories.has(p.category));
 
   const normalized = normalizeInput(input);
-  const deleeted = deleetInput(normalized);
+
   const matchedPatterns: string[] = [];
+  const matchedIds = new Set<string>();
   const matchedCategories = new Set<InjectionCategory>();
   let maxWeight = 0;
 
-  // Scan the normalised input first; fall back to the leet-folded form so
-  // attacks like "1gn0r3 pr3v10us 1nstruct10ns" also fire.
+  // Scan the normalised input first (clean ids), then fall back to obfuscation
+  // variants so an attack only has to match in ONE form. Each variant rewrites
+  // a known evasion back to its plain form:
+  //   :leet       — "1gn0r3 pr3v10us"  → leetspeak folded to letters
+  //   :despaced   — "i g n o r e"      → spaced-out chars collapsed
+  //   :demarkdown — "ig**no**re"       → markdown emphasis stripped
+  const variants: Array<{ suffix: string; text: string }> = [];
+  const deleeted = deleetInput(normalized);
+  if (deleeted !== normalized) variants.push({ suffix: ":leet", text: deleeted });
+  const despaced = collapseSpacedChars(normalized);
+  if (despaced !== normalized) variants.push({ suffix: ":despaced", text: despaced });
+  const demarkdown = stripMarkdownEmphasis(normalized);
+  if (demarkdown !== normalized) variants.push({ suffix: ":demarkdown", text: demarkdown });
+
   for (const pattern of allPatterns) {
-    const matchedOriginal = pattern.pattern.test(normalized);
-    const matchedLeet = !matchedOriginal && deleeted !== normalized && pattern.pattern.test(deleeted);
-    if (matchedOriginal || matchedLeet) {
-      const id = matchedLeet ? pattern.id + ":leet" : pattern.id;
-      matchedPatterns.push(id);
+    if (pattern.pattern.test(normalized)) {
+      matchedPatterns.push(pattern.id);
+      matchedIds.add(pattern.id);
       matchedCategories.add(pattern.category);
-      // Leet matches get the same +0.1 nudge encoded attacks get — they are
-      // deliberate obfuscation, so we rank them slightly higher than a plain
-      // keyword hit.
-      const weight = matchedLeet ? Math.min(1, pattern.weight + 0.1) : pattern.weight;
-      if (weight > maxWeight) maxWeight = weight;
+      if (pattern.weight > maxWeight) maxWeight = pattern.weight;
+    }
+  }
+
+  // Obfuscation variants get the same +0.1 nudge as encoded attacks — they are
+  // deliberate evasion, so they rank slightly above a plain keyword hit. A
+  // pattern already matched in a cleaner form is not re-counted.
+  for (const { suffix, text } of variants) {
+    for (const pattern of allPatterns) {
+      if (matchedIds.has(pattern.id)) continue;
+      if (pattern.pattern.test(text)) {
+        matchedPatterns.push(pattern.id + suffix);
+        matchedIds.add(pattern.id);
+        matchedCategories.add(pattern.category);
+        const weight = Math.min(1, pattern.weight + 0.1);
+        if (weight > maxWeight) maxWeight = weight;
+      }
     }
   }
 

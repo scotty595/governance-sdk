@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.18.1] - 2026-06-26 — Evasion-resistant injection normalization
+
+Hardens `detectInjection()` against obfuscated prompt-injection attacks that
+slipped past keyword patterns, and adds two agent-specific attack patterns.
+The detector now folds three more evasion classes back to their plain form
+before matching, so an attacker can no longer dodge a rule by spacing out
+letters, breaking a word with markdown, or swapping in lookalike characters.
+
+Purely additive — no API changes, no config changes. Existing thresholds and
+custom patterns behave exactly as before; the new normalization only widens
+what the *same* patterns can see.
+
+On the Lua Injection Benchmark v1 (6,931 samples) this lifts the shipped
+regex detector from **781 → 801** true positives (recall 37.26% → 38.22%,
+F1 48.27% → 49.19%) for a single additional false positive — precision holds
+at ~69% and the false-positive rate is unchanged at ~7.4%.
+
+### Added
+
+- **Confusable (homoglyph) folding** — Cyrillic/Greek lookalikes are mapped to
+  their Latin form during normalization (`systеm prоmpt` with Cyrillic `е`/`о`
+  → `system prompt`). NFKC does not fold these, so they previously survived
+  untouched.
+- **Spaced-character collapsing** — `collapseSpacedChars()` rejoins runs of
+  4+ single characters split by spaces or `. _ -` (`i g n o r e` → `ignore`),
+  replacing the previous single hardcoded pattern. Short runs (initials,
+  acronyms like `U S A`) are left intact.
+- **Markdown-emphasis stripping** — `stripMarkdownEmphasis()` removes `*`, `_`,
+  `~`, and backtick markers attackers insert mid-word (`ig**no**re` → `ignore`).
+- Two new built-in patterns (54 → 56): `agent_worm_propagation` (instructions
+  that try to spread to other agents) and `forced_tool_call` (tool/function
+  selection controls smuggled into free-text input).
+
+### Changed
+
+- The matcher now scans the normalized input plus each obfuscation variant
+  (`:leet`, `:despaced`, `:demarkdown`) in one pass; a pattern already matched
+  in a cleaner form is not re-counted. Obfuscation-variant hits keep the same
+  +0.1 weight nudge that encoded-payload matches already received.
+
 ## [0.18.0] - 2026-06-26 — Per-org (multi-tenant) audit chains
 
 The tamper-evident audit chain is now scoped **per organization**. Before
