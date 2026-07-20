@@ -1,5 +1,107 @@
 # Changelog
 
+## [0.18.2] - 2026-07-15 — Multi-process-safe audit integrity chain
+
+Fixes silent audit-event loss and hash-chain forking when the integrity audit
+(`integrityAudit`) runs behind more than one process (e.g. multiple replicas, a
+`pm2` cluster, or serverless instances sharing one Postgres database).
+
+Previously the chain's `sequence` and `previousHash` were held as
+process-local state, resumed from the durable head only once at boot. Every
+process then advanced its own counter independently, so two processes derived
+the same sequence for the same org — one `INSERT` won and the other lost to
+the `UNIQUE (COALESCE(organization_id,''), integrity_sequence)` index
+(Postgres `23505`), dropping that governance decision's tamper-evident record.
+Even without a collision the per-process `previousHash` forked the chain.
+
+Sequence allocation and previous-hash derivation are now atomic **against the
+database, per org**: the storage adapter reads the current head, derives the
+HMAC, and inserts — all under a per-org lock — on every write. No consumer
+code change is required beyond upgrading; `createGovernance({ integrityAudit })`
+picks up the safe path automatically.
+
+Backward compatible: the canonical hash form, per-org scoping, `verify()`,
+`export()`, and `stats()` are unchanged.
+
+### Added
+
+- `GovernanceStorage.appendToAuditChain(event, computeIntegrity)` — atomically
+  reads the org's durable head, invokes `computeIntegrity(head)` (the signing
+  key stays in the SDK core), and persists event + integrity as one operation.
+  Implemented by the memory adapter (per-org async lock) and the Postgres
+  adapter.
+- Postgres path uses a transaction with
+  `pg_advisory_xact_lock(<classid>, hashtext(org))` → head `SELECT` → `INSERT`
+  → `COMMIT`, serialising each org's chain against itself across all writers
+  (unrelated orgs proceed in parallel). The two-arg lock form namespaces the
+  key under a fixed classid so other advisory-lock users of the same database
+  can't contend with the audit chain.
+- `PgClientLike` type and an optional `connect()` on `PgPoolLike` for the
+  transactional path. Pools exposing only `query()` fall back to a bounded
+  read-head → insert → retry-on-`23505` loop with jittered backoff, which is
+  also multi-writer-safe: every unique-violation means a competitor committed
+  the derived sequence, so a writer loses at most once per concurrent same-org
+  contender (the retry cap absorbs 12-way same-instant contention).
+
+### Changed
+
+- `createGovernance()` prefers `appendToAuditChain` when the storage adapter
+  provides it; the previous `createAuditEventWithIntegrity` + process-local
+  sequence path remains only as a fallback for third-party adapters that
+  predate this method (correct under a single writer).
+- The Postgres chain-head `SELECT` now scopes by `COALESCE(organization_id,'')`
+  — the exact partition of the unique index and the advisory-lock key — so the
+  head read can never disagree with the uniqueness/lock scope (a literal-`''`
+  org and the org-less chain were previously read as different heads while
+  colliding on the same index partition). Matching the index expression also
+  lets the head read walk the unique index directly.
+
+### Fixed
+
+- `verifyAuditIntegrity()` and `integrityChain.export()` now order entries by
+  the HMAC-covered `sequence` (wall-clock `createdAt` only tiebreaks) instead
+  of `createdAt`-first. `createdAt` is stamped before the append lock, so
+  under concurrent writers a lower sequence can carry a later timestamp
+  (lock-wait inversion, cross-process clock skew) — the old ordering could report
+  a valid multi-writer chain as tampered. Sequence ordering is tamper-safe:
+  the sequence is inside the signed hash, so forging it still breaks the
+  hash/previous-hash checks.
+- On the transactional append path, a failed `ROLLBACK` now destroys the
+  pooled connection (`client.release(err)`) instead of returning a dead or
+  aborted-transaction client to the pool.
+- `integrityChain.export()` / `verifyAuditIntegrity()` now read durable
+  integrity whenever the adapter implements `getAuditIntegrity`, no longer
+  gating that read on the legacy `createAuditEventWithIntegrity`. An adapter
+  implementing the new `appendToAuditChain` write contract plus
+  `getAuditIntegrity` (but not the legacy write method) previously exported an
+  empty chain even though its writes persisted integrity durably.
+- A storage adapter with durable integrity but no `appendToAuditChain` now
+  emits a one-time `onAuditError` advisory: it uses process-local sequence
+  allocation, which is multi-process-safe only under a single writer. The
+  README's "falls back safely and warns" guidance previously held only for the
+  older session-local (no `createAuditEventWithIntegrity`) fallback.
+
+### Notes
+
+- `integrityChain.stats()` still reports this process's last-written sequence
+  and hash (a process-local cache), so it can lag another process's writes. The
+  durable chain is authoritative; `export()` + `verifyAuditIntegrity()` read
+  from storage. A DB-backed `stats()` is deferred (it would change the method
+  from sync to async — a breaking signature change); tracked in #39.
+- The standalone `createIntegrityAudit()` wrapper in `audit-integrity.ts`
+  keeps its chain in process memory and is **single-process only** — it is a
+  separate, in-memory construct from the durable
+  `createGovernance({ integrityAudit })` path this fix hardens (the wrapper
+  holds no storage handle to append against). It now carries a prominent
+  single-process warning in its JSDoc and the README "Multi-process
+  deployments" note; use `createGovernance({ integrityAudit })` for durable,
+  multi-process audit.
+- Rolling deploys: the advisory lock only protects writers that take it.
+  During a mixed-version window, pre-0.18.2 processes still allocate from
+  their process-local counters and can collide with or fork past locked
+  writers. Replace all writers together; expect residual unique-violation
+  warnings until the last old process drains.
+
 ## [0.18.1] - 2026-06-26 — Evasion-resistant injection normalization
 
 Hardens `detectInjection()` against obfuscated prompt-injection attacks that
