@@ -6,8 +6,8 @@ Thanks for your interest in contributing! This guide covers everything you need 
 
 ```bash
 # Clone the repository
-git clone https://github.com/lua-ai-global/governance.git
-cd governance
+git clone https://github.com/scotty595/governance-sdk.git
+cd governance-sdk
 
 # Install dependencies
 npm install
@@ -68,9 +68,9 @@ packages/
 
 ## Reporting Issues
 
-- **Bugs**: Open a [GitHub issue](https://github.com/lua-ai-global/governance/issues) with steps to reproduce, expected vs. actual behavior, and your Node/SDK version
+- **Bugs**: Open a [GitHub issue](https://github.com/scotty595/governance-sdk/issues) with steps to reproduce, expected vs. actual behavior, and your Node/SDK version
 - **Security vulnerabilities**: See [SECURITY.md](./SECURITY.md) — do not open a public issue
-- **Feature requests**: Open a [GitHub issue](https://github.com/lua-ai-global/governance/issues) describing the use case
+- **Feature requests**: Open a [GitHub issue](https://github.com/scotty595/governance-sdk/issues) describing the use case
 
 ## License
 

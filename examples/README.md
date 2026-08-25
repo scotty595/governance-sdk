@@ -5,9 +5,16 @@ Runnable examples for every featured framework adapter, in two modes:
 | Directory | What it shows |
 |-----------|---------------|
 | [`local/`](./local) | **Local mode** — `createGovernance({ rules: [...] })` evaluates policies in-process. No network, no API key. Best for learning how policies compose and how adapters intercept calls. |
-| [`hosted/`](./hosted) | **Hosted mode** — `createGovernance({ serverUrl, apiKey })` forwards enforce calls to [Lua Governance Cloud](https://heygovernance.ai). Adds ML injection detection, approval workflows, and fleet analytics. |
-| [`demo-app/`](./demo-app) | **Full-stack demo** — Vite + React SPA showing the approval UI, fleet scoring dashboard, and per-agent policy inspector against a hosted governance API. |
+| [`hosted/`](./hosted) | **Hosted mode** — `createGovernance({ serverUrl, apiKey })` forwards enforce calls to a hosted governance API (e.g. [Lua Governance Cloud](https://heygovernance.ai), a separate commercial product). Adds ML injection detection, approval workflows, and fleet analytics. |
+| [`demo-app/`](./demo-app) | **Interactive playground** — Vite + React SPA. Local mode runs the SDK entirely in the browser (no API key); hosted mode optionally targets a governance API. |
 | [`shared/`](./shared) | Helpers (mock tools, injection payloads, pretty-printer) shared across the scripts above. |
+
+## Fastest path
+
+```bash
+npx governance-sdk demo      # nothing to clone, no API key (v0.21.0+)
+npm run demo                 # same walkthrough from the root of a clone
+```
 
 ## Setup
 
@@ -32,7 +39,7 @@ npm run local:all
 
 ## Run a hosted example
 
-Get an API key from [heygovernance.ai](https://heygovernance.ai), then:
+Hosted examples need an API key for a governance API — for example from [heygovernance.ai](https://heygovernance.ai) — then:
 
 ```bash
 GOVERNANCE_API_KEY=ak_... npm run hosted:anthropic

@@ -7,6 +7,9 @@ permissions:
   # the end (uses `gh release create`). Read-only is enough for the
   # actual npm publish — that's authenticated via NODE_AUTH_TOKEN.
   contents: write
+  # `id-token: write` lets npm attach a signed provenance attestation that
+  # links the published tarball to this repository and workflow run.
+  id-token: write
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -39,7 +42,7 @@ jobs:
               echo "⏭ $PKG_NAME@$PKG_VERSION already published, skipping"
             else
               echo "📦 Publishing $PKG_NAME@$PKG_VERSION"
-              npm publish -w "packages/$pkg" --access public
+              npm publish -w "packages/$pkg" --access public --provenance
             fi
           done
 

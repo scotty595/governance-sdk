@@ -1,6 +1,6 @@
 {
   "name": "governance-sdk-platform",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Platform storage layer for governance-sdk — auto-migrating schema, typed queries for org settings and policy tiers",
   "type": "module",
   "main": "./dist/index.js",
@@ -22,7 +22,10 @@
     "test": "tsx --test src/*.test.ts",
     "lint": "tsc --noEmit"
   },
-  "author": "Lua <hello@heylua.ai> (https://heylua.ai)",
+  "author": "Scott Waddell (https://github.com/scotty595)",
+  "contributors": [
+    "Lua AI, Inc. (https://heylua.ai)"
+  ],
   "license": "MIT",
   "keywords": [
     "governance-sdk",
@@ -40,13 +43,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/lua-ai-global/governance",
+    "url": "https://github.com/scotty595/governance-sdk",
     "directory": "packages/governance-platform"
   },
   "bugs": {
-    "url": "https://github.com/lua-ai-global/governance/issues"
+    "url": "https://github.com/scotty595/governance-sdk/issues"
   },
-  "homepage": "https://heygovernance.ai",
+  "homepage": "https://github.com/scotty595/governance-sdk#readme",
   "peerDependencies": {
     "pg": ">=8.0.0"
   },

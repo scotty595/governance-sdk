@@ -63,7 +63,7 @@ const bg = '#0a0a0a';
 const bgGradient = 'radial-gradient(circle at 20% 0%, #1a1a1a 0%, #0a0a0a 55%)';
 const fg = '#f5f5f5';
 const dim = '#a1a1aa';
-const accent = '#f97316'; // orange-500, matches the Lua avatar vibe
+const accent = '#f97316'; // orange-500
 const codeBg = '#111111';
 const codeBorder = '#27272a';
 const keyword = '#f97316';
@@ -212,7 +212,7 @@ const tree = {
                         color: dim,
                         fontWeight: 500,
                       },
-                      children: '1,291 tests · MIT',
+                      children: '1,460+ tests · MIT',
                     },
                   },
                 ],
@@ -317,7 +317,7 @@ const tree = {
                   color: fg,
                   fontWeight: 500,
                 },
-                children: 'heygovernance.ai',
+                children: 'github.com/scotty595/governance-sdk',
               },
             },
           ],

@@ -1,6 +1,6 @@
 {
   "name": "governance-sdk",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "AI Agent Governance for TypeScript — policy enforcement, scoring, compliance, and audit for AI agents",
   "type": "module",
   "main": "./dist/index.js",
@@ -244,7 +244,10 @@
     "guardrails",
     "typescript"
   ],
-  "author": "Lua <hello@heylua.ai> (https://heylua.ai)",
+  "author": "Scott Waddell (https://github.com/scotty595)",
+  "contributors": [
+    "Lua AI, Inc. (https://heylua.ai)"
+  ],
   "license": "MIT",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
@@ -252,12 +255,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/lua-ai-global/governance"
+    "url": "https://github.com/scotty595/governance-sdk"
   },
   "bugs": {
-    "url": "https://github.com/lua-ai-global/governance/issues"
+    "url": "https://github.com/scotty595/governance-sdk/issues"
   },
-  "homepage": "https://heygovernance.ai",
+  "homepage": "https://github.com/scotty595/governance-sdk#readme",
   "engines": {
     "node": ">=20"
   },
