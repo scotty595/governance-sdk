@@ -120,7 +120,7 @@ describe("GovernanceProcessor", () => {
       owner: "test-team",
     });
     assert.equal(processor.id, "governance-sdk");
-    assert.equal(processor.name, "Lua Governance Processor");
+    assert.equal(processor.name, "Governance Processor");
   });
 
   it("auto-registers agent on first processOutputStep", async () => {

@@ -24,7 +24,7 @@ Examples of unacceptable behavior:
 
 ## Enforcement
 
-Instances of unacceptable behavior may be reported to **conduct@heylua.ai**. All complaints will be reviewed and investigated promptly and fairly.
+Instances of unacceptable behavior may be reported privately to the maintainer, [@scotty595](https://github.com/scotty595), through GitHub — a direct message, or a private security advisory via the repository's **Security** tab if you prefer a form. All complaints will be reviewed and investigated promptly and fairly.
 
 ## Attribution
 

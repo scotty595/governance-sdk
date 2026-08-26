@@ -1,73 +1,41 @@
-# React + TypeScript + Vite
+# governance-sdk playground
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+An interactive React + Vite app for poking at the SDK in a browser. **Local
+mode runs the SDK entirely client-side — no account, no API key, no server.**
+Hosted mode is optional and targets any governance REST API.
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+cd examples/demo-app
+npm install
+npm run dev
+# open http://localhost:5173
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+The app depends on the SDK via `file:../../packages/governance`, so run
+`npm install && npm run build` at the repository root first if `dist/` is
+missing.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## What you can do
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+| Tab | Local mode | Hosted mode |
+|-----|-----------|-------------|
+| **Configure** | Register an agent (name, framework, level) and toggle policy rules: blocked tools, `requireLevel`, injection-guard threshold. A **Generated Code** panel shows the exact `createGovernance({...})` call for what you clicked. | Enter an API URL + key, pick an existing agent (or create one) and inspect the policies the server applies to it. |
+| **Test** | Fire prompts and tool calls through the three-stage pipeline — `preprocess` (injection scan) → `process` (tool-call policy) → `postprocess` (output scan/mask) — and watch each stage pass, block, or mask. Presets include a safe message, role-override and encoded injections, an API-key leak, and a PII disclosure. | Same UI; decisions come from the remote `enforce` endpoint. |
+| **Audit** | Every scan and decision the session made, in order. | Same, from the session. |
+
+Nothing here talks to an LLM — the point is to see what the governance layer
+does *around* one.
+
+## Hosted mode
+
+Hosted mode needs a server that implements the governance REST API the SDK's
+remote enforcer expects (see `packages/governance/src/remote-enforce.ts`).
+[Lua Governance Cloud](https://heygovernance.ai) is one such implementation
+and is a separate commercial product, not part of this repository. Paste its
+URL and an API key into the **Configure** tab to use it.
+
+## Prefer a terminal?
+
+`npx governance-sdk demo` (or `npm run demo` from the repository root) runs
+the same enforcement, injection, masking, and audit-chain story in-process in
+under a second.

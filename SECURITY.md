@@ -2,16 +2,20 @@
 
 ## Supported Versions
 
+Security fixes land on the latest 0.x release only.
+
 | Version | Supported |
 |---------|-----------|
-| 0.9.x   | ✅        |
-| < 0.9   | ❌        |
+| 0.21.x  | ✅        |
+| < 0.21  | ❌        |
 
 ## Reporting a Vulnerability
 
 **Do not open a public issue for security vulnerabilities.**
 
-Please report security issues by emailing **security@heylua.ai** with:
+Report privately through GitHub's private vulnerability reporting:
+**[Report a vulnerability](https://github.com/scotty595/governance-sdk/security/advisories/new)**
+(Security tab → *Report a vulnerability*). Include:
 
 - Description of the vulnerability
 - Steps to reproduce

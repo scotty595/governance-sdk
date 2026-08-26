@@ -71,7 +71,7 @@ export type {
 
 export class GovernanceProcessor implements MastraProcessorInterface {
   readonly id = "governance-sdk" as const;
-  readonly name = "Lua Governance Processor";
+  readonly name = "Governance Processor";
 
   private governance: GovernanceInstance;
   private config: GovernanceProcessorConfig;

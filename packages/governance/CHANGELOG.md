@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.21.0] - 2026-08-26 — Independent maintenance, `demo` command
+
+governance-sdk is now maintained independently at
+https://github.com/scotty595/governance-sdk by its original author. The code
+was developed at Lua and published from `lua-ai-global/governance` through
+0.20.0; the MIT license and Lua's copyright notice on that work are unchanged.
+The npm package name, every import path, and the public API are unchanged.
+
+### Added
+
+- `npx governance-sdk demo` — a zero-setup walkthrough that runs entirely
+  in-process (no network, no API key, nothing written to disk, under a
+  second). It registers an agent, enforces three tool calls (`allow` /
+  `block` / `require_approval`), pre-scans a prompt-injection attempt,
+  masks a leaked connection string and SSN in a model response, then exports
+  the HMAC audit chain and shows that an edited or deleted event fails
+  `verifyAuditIntegrity()`. `runDemo(print, { color })` in `cli/demo.ts`
+  returns every decision so the scenario is covered by tests. From a clone,
+  `npm run demo` at the repository root runs the same thing.
+- `npx governance-sdk --help` / `-h` / `help` now print usage and exit 0
+  (previously reported "Unknown command" and exited 1).
+
+### Changed
+
+- Package metadata (`repository`, `bugs`, `homepage`, `author`) points at
+  the new repository; Lua AI, Inc. is listed under `contributors`. The same
+  metadata change ships in `governance-sdk-platform` 0.1.4 (metadata only).
+- Mastra `GovernanceProcessor.name` is `"Governance Processor"` (was
+  `"Lua Governance Processor"`). Only visible in logs/traces that print the
+  processor name.
+- CycloneDX SBOM default `metadata.tools[].vendor` is `"governance-sdk"`
+  (was `"Lua"`). Override with the `tool` option as before.
+- CLI `init` scaffold header, help text, and docs links point at the new
+  repository. Releases are published with npm provenance attestations.
+- README: hosted mode is documented vendor-neutrally (`serverUrl` targets
+  any server implementing the remote-enforcer contract; Lua Governance Cloud
+  is one implementation and is not part of this repo); comparison claims are
+  hedged and dated; "12 framework integrations" is clarified as 12
+  integration modules across 11 frameworks.
+
+### Unchanged, deliberately
+
+- Postgres default table prefix `lua_gov` — renaming it would break existing
+  databases. Set `tablePrefix` if you want a different one.
+- The Lua Injection Benchmark (LIB) dataset name and files.
+
 ## [0.20.0] - 2026-08-08 — Tool-name approval gating (`requireToolApproval`)
 
 Adds a first-class preset for requiring human approval on specific *tools*.

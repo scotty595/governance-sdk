@@ -184,7 +184,7 @@ export function generateCycloneDxSbom(input: CycloneDxGeneratorInput): CycloneDx
     packageJson,
     lockfile,
     includeDev = false,
-    tool = { vendor: "Lua", name: "governance-sdk" },
+    tool = { vendor: "governance-sdk", name: "governance-sdk" },
     timestamp = new Date().toISOString(),
     serialNumber = `urn:uuid:${generateUUID()}`,
   } = input;

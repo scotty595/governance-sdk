@@ -16,7 +16,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const REPO = "lua-ai-global/governance";
+const REPO = "scotty595/governance-sdk";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(ROOT, "README.md");
 const DST = join(ROOT, "packages", "governance", "README.md");
