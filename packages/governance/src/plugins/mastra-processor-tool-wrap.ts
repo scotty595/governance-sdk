@@ -1,21 +1,23 @@
 /**
  * Mastra tool-wrapping for governance.
  *
- * Why this exists: Mastra's Processor lifecycle has no hook between a tool's
- * `execute()` returning and the LLM ingesting the result on the next turn.
- * That gap is where prompt-injection from external content (file contents,
- * clipboard, scraped pages) lands today, unscanned. This module closes it
- * by wrapping each tool's `execute()` at construction time — the wrapper
- * runs the original tool, then runs the result through `scanToolResult()`
- * (the shared signal-then-enforce helper) before returning.
+ * Why this exists: before @mastra/core 1.57 the Processor lifecycle had no
+ * hook between a tool's `execute()` returning and the LLM ingesting the
+ * result on the next turn. That gap is where prompt-injection from external
+ * content (file contents, clipboard, scraped pages) lands, unscanned. This
+ * module closes it by wrapping each tool's `execute()` at construction time
+ * — the wrapper runs the original tool, then runs the result through
+ * `scanToolResult()` (the shared signal-then-enforce helper) before returning.
  *
  * Integrators apply the wrapper through:
  *   - `processor.wrapTool(tool)` — single tool
  *   - `processor.wrapTools({ name: tool, ... })` — bulk
  *
- * If/when Mastra core grows a `processToolResult` lifecycle hook, this module
- * stays as the backwards-compat shim — both paths call the same
- * `scanToolResult()`, so swapping is one line.
+ * @mastra/core >= 1.57 ships the `processToolResult` hook (mastra-ai/mastra
+ * #16012) and `GovernanceProcessor` implements it, so on those versions the
+ * wrapper is unnecessary. It stays as the backwards-compat path — both call
+ * the same `scanToolResult()`, and the processor skips wrapped tools in the
+ * hook, so mixing them never double-scans.
  */
 
 import type { GovernanceInstance } from "../index.js";

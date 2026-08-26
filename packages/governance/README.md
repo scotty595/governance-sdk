@@ -693,12 +693,20 @@ where all three hold.
 - **Output post-scan** — postprocess-stage rules (PII masking, output pattern
   blocking, output length) run on the model response **after** generation.
 - **Tool-call** — policy evaluation + audit logging around tool/function execution.
+- **Tool-result** — `tool_result`-stage rules (injection in returned content,
+  leaked secrets, scope/network rules keyed on the tool's args) run on what a
+  tool returned **before** the LLM ingests it. Adapters that see tool returns
+  (Mastra, OpenAI Agents, LangChain, LlamaIndex, Genkit, MCP) scan them here;
+  `scanToolResults` is on by default. Mastra uses the native
+  `processToolResult` hook on `@mastra/core` ≥ 1.57 (contributed as
+  [mastra-ai/mastra#16012](https://github.com/mastra-ai/mastra/pull/16012)) and
+  `wrapTool` / `wrapTools` on older versions.
 
 ### Featured — full LLM + tool coverage (pre + post + streaming + tools)
 
 | Framework | Import Path | Input pre-scan | Output post-scan | Output streaming | Tool-call |
 |---|---|:-:|:-:|:-:|:-:|
-| Mastra (processor) | `governance-sdk/plugins/mastra-processor` | ✅ | ✅ | ✅ | ✅ |
+| Mastra (processor) | `governance-sdk/plugins/mastra-processor` | ✅ | ✅ | ✅ | ✅³ |
 | Vercel AI SDK | `governance-sdk/plugins/vercel-ai` | ✅ | ✅ | ✅ | ✅ |
 | OpenAI Agents SDK | `governance-sdk/plugins/openai-agents` | ✅ | ✅ | ✅¹ | ✅ |
 | LangChain | `governance-sdk/plugins/langchain` | ✅ | ✅ | ✅ | ✅ |
@@ -711,6 +719,7 @@ where all three hold.
 
 ¹ OpenAI Agents output guardrails fire at stream final assembly (SDK-native behavior).
 ² Mastra middleware exposes `scanInput` / `scanOutput` / `scanOutputStream` helpers — explicit calls you make from your runtime loop, rather than automatic lifecycle hooks. Use the `mastra-processor` export if you want automatic hooks via `inputProcessors[]` / `outputProcessors[]`.
+³ Tool *results* are governed too. On `@mastra/core` ≥ 1.57 the processor implements the native `processToolResult` hook, so every tool return is scanned at the `tool_result` stage automatically: block → the result is replaced with `{ blocked, reason, ruleId }` via `messageList.updateToolInvocation` (or the run is tripwired with `toolResultBlockMode: 'abort'`); mask → the redacted text replaces it. Streaming clients see the processed value. On older Mastra, or for tools run outside the agent loop, use `processor.wrapTool()` / `wrapTools()` — wrapped tools are skipped by the hook, so mixing both never double-scans.
 
 ### Specialty
 
@@ -734,7 +743,29 @@ runtimes — no separate adapter needed.
 
 All framework dependencies are optional peer dependencies — install only what you use.
 
-### Pre/post usage — four canonical patterns
+### Pre/post usage — five canonical patterns
+
+**Mastra** — one processor, every lifecycle hook (input, tool calls, tool results, streaming, final output):
+
+```ts
+import { Agent } from '@mastra/core/agent';
+import { GovernanceProcessor } from 'governance-sdk/plugins/mastra-processor';
+
+const processor = new GovernanceProcessor(gov, {
+  agentName: 'support', owner: 'team',
+  toolResultBlockMode: 'substitute', // default; 'abort' tripwires the run instead
+  onToolResultBlocked: (decision, { toolName }) => log.warn(`${toolName} result blocked: ${decision.reason}`),
+});
+
+const agent = new Agent({
+  name: 'support', instructions: '...', model, tools,
+  inputProcessors: [processor],  // processInput        → preprocess stage
+  outputProcessors: [processor], // processOutputStep   → tool-call policy
+                                 // processToolResult   → tool_result stage (@mastra/core ≥ 1.57)
+                                 // processOutputStream → per-chunk post-scan
+                                 // processOutputResult → final output post-scan
+});
+```
 
 **Vercel AI SDK** — `experimental_wrapLanguageModel` middleware:
 

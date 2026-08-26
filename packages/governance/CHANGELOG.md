@@ -21,6 +21,28 @@ The npm package name, every import path, and the public API are unchanged.
   `npm run demo` at the repository root runs the same thing.
 - `npx governance-sdk --help` / `-h` / `help` now print usage and exit 0
   (previously reported "Unknown command" and exited 1).
+- **Mastra processor implements the native `processToolResult` hook**
+  (`@mastra/core` ≥ 1.57.0, [mastra-ai/mastra#16012](https://github.com/mastra-ai/mastra/pull/16012)).
+  Tool returns are scanned at the `tool_result` stage automatically, through
+  the same `scanToolResult()` path `wrapTool` uses, so rules behave
+  identically whichever path delivers the result. Block / require_approval →
+  the result is replaced with `{ blocked: true, reason, ruleId }` via
+  `messageList.updateToolInvocation` (default, `toolResultBlockMode:
+  "substitute"`) or the run is tripwired (`"abort"`, honoring
+  `retryOnBlock` / `maxRetries`); mask → the redacted text replaces the
+  result. Mastra re-reads the message list after the hook, so the next LLM
+  turn and streaming clients both see the processed value. Provider-executed
+  results (e.g. Anthropic `web_search`) are scanned too.
+  - New config: `toolResultBlockMode`, `onToolResultBlocked`, `onToolResult`.
+    `metadataProvider` and `onApprovalRequired` now receive stage
+    `"tool_result"`; `getStats().toolResults` counts scanned / blocked /
+    masked.
+  - Tools wrapped with `wrapTool` / `wrapTools` are remembered and skipped by
+    the hook, so integrations that upgrade Mastra without removing their
+    wrap calls don't double-scan or double-audit.
+  - Older Mastra versions never call the method; `wrapTool` / `wrapTools`
+    remain the path there. New types: `ProcessToolResultArgs`,
+    `MastraToolResultInfo`, `MastraMessageListLike`, `MastraToolInvocationPart`.
 
 ### Changed
 
@@ -39,6 +61,8 @@ The npm package name, every import path, and the public API are unchanged.
   is one implementation and is not part of this repo); comparison claims are
   hedged and dated; "12 framework integrations" is clarified as 12
   integration modules across 11 frameworks.
+- Mastra processor: `scanToolResults` and `toolResultScans` now gate the
+  `processToolResult` hook as well as the `wrapTool` / `wrapTools` helpers.
 
 ### Unchanged, deliberately
 

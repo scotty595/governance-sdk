@@ -12,6 +12,11 @@
  * processInput() (preprocess on user messages) and processOutputResult()
  * (postprocess on the agent's final output) in addition to the existing
  * processOutputStep() (tool-call enforcement).
+ *
+ * Updated for governance-sdk 0.21.0: adds the ProcessToolResultArgs mirror
+ * for Mastra's `processToolResult` lifecycle hook (@mastra/core >= 1.57,
+ * mastra-ai/mastra#16012) so tool returns are scanned at the `tool_result`
+ * stage automatically — no `wrapTool` needed on those versions.
  */
 
 import type { EnforcementDecision, PolicyAction } from "../policy";
@@ -60,7 +65,7 @@ export interface MastraStreamWriter {
  * Stage label passed to GovernanceProcessorConfig.metadataProvider.
  * Lets a single metadata-building function distinguish where it was called from.
  */
-export type GovernanceStage = "preprocess" | "tool_call" | "postprocess";
+export type GovernanceStage = "preprocess" | "tool_call" | "tool_result" | "postprocess";
 
 /**
  * Resolved generation result passed to processOutputResult.
@@ -176,19 +181,108 @@ export interface ProcessOutputResultArgs {
 }
 
 /**
+ * A `tool-invocation` message part in result state — the payload
+ * `MessageList.updateToolInvocation()` takes to replace a tool's result.
+ * Mirror of the relevant member of Mastra's `MastraMessagePart` union.
+ */
+export interface MastraToolInvocationPart {
+  type: "tool-invocation";
+  toolInvocation: {
+    state: "result";
+    toolCallId: string;
+    toolName: string;
+    args: unknown;
+    result: unknown;
+  };
+}
+
+/**
+ * The slice of Mastra's `MessageList` the tool-result hook relies on.
+ * Structurally satisfied by the real `MessageList` (@mastra/core >= 1.57).
+ */
+export interface MastraMessageListLike {
+  /**
+   * Replace the result of the tool invocation with the given `toolCallId`.
+   * The runtime re-reads the message list after `processToolResult` and
+   * syncs the new value into the streamed `tool-result` chunk, so both the
+   * next LLM turn and streaming clients see the replacement.
+   * @returns true if the tool call was found and updated.
+   */
+  updateToolInvocation(part: MastraToolInvocationPart, metadata?: Record<string, unknown>): boolean;
+}
+
+/**
+ * Mastra ProcessToolResultArgs — runs after a tool's `execute()` returns
+ * successfully (or a provider-executed result arrives) and BEFORE the result
+ * is appended to the message list / fed to the next LLM call. This is where
+ * `tool_result`-stage governance fires (injection in returned content,
+ * leaked secrets, scope/network rules keyed on the tool's args).
+ *
+ * Mirror of Mastra's ProcessToolResultArgs from @mastra/core/processors
+ * (added in @mastra/core 1.57.0 by mastra-ai/mastra#16012). Does not fire
+ * when `tool.execute()` throws.
+ */
+export interface ProcessToolResultArgs {
+  /** All messages including the assistant message carrying the tool call */
+  messages: MastraMessage[];
+  /** Message list — call `updateToolInvocation` to replace the result */
+  messageList: MastraMessageListLike;
+  /** Step number (0-indexed) */
+  stepNumber: number;
+  /** Name of the tool that was executed (the key in the agent's tools record) */
+  toolName: string;
+  /** Unique identifier for this specific tool call */
+  toolCallId: string;
+  /** Arguments the LLM passed to the tool */
+  args: unknown;
+  /** Value the tool returned (client tools: post-`ensureSerializable`; provider tools: raw) */
+  result: unknown;
+  /** True when a provider executed the tool (e.g. Anthropic `web_search`) */
+  providerExecuted?: boolean;
+  /** System messages (instructions, memory, etc.) */
+  systemMessages: MastraMessage[];
+  /** Step results accumulated so far */
+  steps: unknown[];
+  /** Per-processor state that persists across all method calls within this request */
+  state: Record<string, unknown>;
+  /** Retry count — from ProcessorContext */
+  retryCount: number;
+  /** Abort function — from ProcessorContext (Mastra tripwire) */
+  abort: MastraAbortFn;
+  /** Per-request execution metadata — from ProcessorContext (optional) */
+  requestContext?: unknown;
+  /** Stream writer for emitting custom data-* chunks (optional, from ProcessorContext) */
+  writer?: MastraStreamWriter;
+  /** Abort signal from parent agent execution (optional, from ProcessorContext) */
+  abortSignal?: AbortSignal;
+}
+
+/** What the tool-result callbacks receive alongside the decision. */
+export interface MastraToolResultInfo {
+  toolName: string;
+  toolCallId: string;
+  args: unknown;
+  /** The tool's ORIGINAL return value (before any substitution or masking). */
+  result: unknown;
+  providerExecuted?: boolean;
+}
+
+/**
  * Union of all argument shapes a `metadataProvider` callback may receive.
  * The `stage` parameter tells the callback which lifecycle method called it.
  */
 export type GovernanceLifecycleArgs =
   | ProcessInputArgs
   | ProcessOutputStepArgs
+  | ProcessToolResultArgs
   | ProcessOutputResultArgs;
 
 /**
  * Mastra Processor interface — simplified for governance use.
  *
- * As of governance-sdk 0.9.0, the GovernanceProcessor implements four
+ * As of governance-sdk 0.21.0, the GovernanceProcessor implements five
  * Mastra lifecycle methods: processInput, processOutputStep,
+ * processToolResult (@mastra/core >= 1.57; ignored by older versions),
  * processOutputResult, and processOutputStream (per-chunk streaming).
  * processInputStep is not implemented (agentic-loop step, not per-chunk input).
  *
@@ -203,6 +297,12 @@ export interface MastraProcessorInterface {
   processInput?(args: ProcessInputArgs): Promise<unknown> | unknown;
   /** Per-step: runs after each LLM response, before tool execution */
   processOutputStep(args: ProcessOutputStepArgs): Promise<unknown> | unknown;
+  /**
+   * Tool-result: runs after each tool's execute() returns, before the LLM
+   * ingests the result (@mastra/core >= 1.57). Replace the result via
+   * args.messageList.updateToolInvocation(), or call args.abort() to tripwire.
+   */
+  processToolResult?(args: ProcessToolResultArgs): Promise<unknown> | unknown;
   /** Postprocess: runs once at the end, with the resolved output */
   processOutputResult?(args: ProcessOutputResultArgs): Promise<unknown> | unknown;
   /**
@@ -339,23 +439,55 @@ export interface GovernanceProcessorConfig {
   /** Fired when a stream chunk is blocked by a rule. */
   onStreamBlocked?: (decision: EnforcementDecision, chunkText: string) => void;
 
-  // ─── Tool-result scanning (wrapTool / wrapTools) — 0.14.0 ────
+  // ─── Tool-result scanning — 0.14.0 (wrapTool) / 0.21.0 (hook) ─
   /**
-   * Master switch for tool-result governance via `wrapTool` / `wrapTools`.
-   * Default: `true`. Set to `false` to make those methods no-op (return
-   * the tool unchanged) — useful for test environments that mock tool
-   * returns and don't want the scan to run.
+   * Master switch for tool-result governance — both the automatic
+   * `processToolResult` hook (@mastra/core >= 1.57) and the `wrapTool` /
+   * `wrapTools` helpers. Default: `true`. Set to `false` to skip the
+   * `tool_result` stage entirely (the hook returns without enforcing and
+   * the wrap helpers return the tool unchanged) — useful for test
+   * environments that mock tool returns and don't want the scan to run.
    *
-   * Note: this only affects the wrap helpers. Existing pre-call governance
-   * via `processOutputStep` is unaffected and always runs.
+   * Note: pre-call governance via `processOutputStep` is unaffected and
+   * always runs.
    */
   scanToolResults?: boolean;
   /**
-   * Per-tool override for `scanToolResults`. Keys are tool names
-   * (Mastra `tool.id`). Use `"never"` to skip scanning a specific tool
-   * even when `scanToolResults: true` globally.
+   * Per-tool override for `scanToolResults`. Keys are tool names — the
+   * name Mastra reports for the call (the key in the agent's tools record)
+   * for the hook, or `tool.id` for `wrapTool`. Use `"never"` to skip
+   * scanning a specific tool even when `scanToolResults: true` globally.
    */
   toolResultScans?: Record<string, "always" | "never">;
+  /**
+   * What the `processToolResult` hook does when a `tool_result`-stage rule
+   * blocks (or requires approval). Default: `"substitute"`.
+   *
+   *   - `"substitute"` — replace the tool's result in the message list with
+   *     `{ blocked: true, reason, ruleId }` via `messageList.updateToolInvocation`.
+   *     The LLM (and streaming clients) see the substitute, never the
+   *     original content, and the run continues so the model can adapt.
+   *     Same semantics as `wrapTool`.
+   *   - `"abort"` — call `args.abort()` (Mastra tripwire). Honors
+   *     `retryOnBlock` / `maxRetries`: while retries remain the abort
+   *     carries `retry: true` so Mastra re-runs the step with the reason as
+   *     feedback; otherwise the run halts.
+   *
+   * Only affects the hook. `wrapTool` always substitutes.
+   */
+  toolResultBlockMode?: "substitute" | "abort";
+  /**
+   * Fired when a `tool_result`-stage rule blocks (or requires approval on)
+   * a tool's return value in the `processToolResult` hook. `info.result` is
+   * the original value the tool returned.
+   */
+  onToolResultBlocked?: (decision: EnforcementDecision, info: MastraToolResultInfo) => void;
+  /**
+   * Fired after every tool-result scan in the `processToolResult` hook,
+   * whatever the outcome. Use it for audit/metrics; branch on
+   * `decision.outcome`.
+   */
+  onToolResult?: (decision: EnforcementDecision, info: MastraToolResultInfo) => void;
   /**
    * Per-tool registry mapping input arg names to EnforcementContext fields.
    * Without this, rules like `scope_boundary: { allowedPaths }` and
@@ -397,5 +529,7 @@ export interface ProcessorStats {
   totalBlocked: number;
   totalAllowed: number;
   byTool: Record<string, { allowed: number; blocked: number }>;
+  /** Counters for the `processToolResult` hook (tool_result stage). */
+  toolResults: { scanned: number; blocked: number; masked: number };
   initializedAt: string;
 }
