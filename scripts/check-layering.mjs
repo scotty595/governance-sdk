@@ -9,7 +9,8 @@
  *
  *   core      — the policy engine, audit chain, storage contract, event bus.
  *               May import only core.
- *   adapters  — src/plugins/**, one per framework. May import core.
+ *   adapters  — src/plugins/** (one per framework) and src/conformance/**
+ *               (the Agent Hooks contract). May import core.
  *   ext       — src/ext/**, detection / standards / scoring / sinks.
  *               May import core. Never an adapter.
  *
@@ -28,7 +29,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(ROOT, "packages/governance/src");
 
-const ADAPTER_DIR = "plugins/";
+const ADAPTER_DIRS = ["plugins/", "conformance/"];
 const EXT_DIR = "ext/";
 /**
  * The CLI is an application on top of the SDK, not part of it — it consumes
@@ -144,7 +145,7 @@ function walk(dir, out = []) {
 
 function layerOf(rel) {
   if (rel.startsWith(APP_DIR)) return "app";
-  if (rel.startsWith(ADAPTER_DIR)) return "adapters";
+  if (ADAPTER_DIRS.some((d) => rel.startsWith(d))) return "adapters";
   if (rel.startsWith(EXT_DIR)) return "ext";
   if (LOGICAL_EXT.has(rel)) return "ext";
   return "core";

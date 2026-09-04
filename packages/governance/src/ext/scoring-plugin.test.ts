@@ -44,9 +44,9 @@ describe("scoringPlugin — install", () => {
   it("unuse() drops the enforcement subscription", async () => {
     const gov = createGovernance();
     await gov.use!(scoringPlugin());
-    assert.equal(gov.events.listenerCount("enforcement"), 1);
+    assert.equal(gov.events!.listenerCount("enforcement"), 1);
     await gov.unuse!("scoring/posture");
-    assert.equal(gov.events.listenerCount("enforcement"), 0);
+    assert.equal(gov.events!.listenerCount("enforcement"), 0);
   });
 });
 

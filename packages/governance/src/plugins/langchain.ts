@@ -35,18 +35,9 @@
  * ```
  */
 
-import type {
-  GovernanceInstance,
-  AuditEvent,
-} from "../index";
-import type {
-  EnforcementDecision,
-  PolicyAction,
-} from "../policy";
-import type { AgentRegistration, AgentFramework } from "../types";
-import { handleOutcome } from "./outcome-handler.js";
-import type { OutcomeCallbacks } from "./outcome-handler.js";
-import { scanToolResult } from "../tool-result-scan.js";
+import type { GovernanceInstance } from "../index";
+import { createAdapterCore } from "./adapter-core.js";
+import type { AdapterConfig, AdapterCore } from "./adapter-core.js";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -97,32 +88,18 @@ export interface LangChainTool {
   invoke: (input: unknown, config?: LangChainRunnableConfig) => Promise<unknown>;
 }
 
-export interface GovernToolConfig {
-  /**
-   * Optional stable agent id, forwarded to `gov.register({ id })`. Pass the
-   * same value on every process start so registration re-binds to the
-   * existing agent row in durable storage instead of creating a new one.
-   * Omit to let the SDK mint a fresh UUID on each registration.
-   */
-  agentId?: string;
-  agentName: string;
-  owner: string;
-  framework?: AgentFramework;
-  description?: string;
-  version?: string;
-  channels?: string[];
-  hasAuth?: boolean;
-  hasGuardrails?: boolean;
-  hasObservability?: boolean;
-  permissions?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
-  onBlocked?: (decision: EnforcementDecision, toolName: string) => void;
-  onDecision?: (decision: EnforcementDecision, toolName: string) => void;
-  onWarn?: (decision: EnforcementDecision, toolName: string) => void;
-  onMask?: (decision: EnforcementDecision, toolName: string, maskedText: string) => void;
-  onApprovalRequired?: (decision: EnforcementDecision, toolName: string) => void;
-  actionMapper?: (toolName: string) => PolicyAction;
-  sessionTokenTracker?: () => number;
+/**
+ * Extends the shared `AdapterConfig`, so beyond the tool-result options below
+ * it accepts every cross-adapter field: `agentId`, `agentName`, `owner`,
+ * `framework`, `metadata`, `actionMapper`, `sessionTokenTracker`, the
+ * `onBlocked` / `onDecision` / `onWarn` / `onMask` / `onApprovalRequired`
+ * callbacks, plus `toolTiers` (consequence tiers for
+ * `requireTierApproval()`), `trackTaint` (provenance from scanned tool
+ * output carried onto later calls, for `blockTaintedTools()`) and
+ * `toolFieldExtraction` (map tool arguments onto `ctx.targetPath` /
+ * `ctx.targetUrl`).
+ */
+export interface GovernToolConfig extends AdapterConfig {
   /**
    * Master switch for tool-result scanning (governance-sdk 0.15+).
    * Default: `true`. Wrapped tools run their return values through the
@@ -145,99 +122,61 @@ export interface GovernedResult {
 
 export { GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outcome-handler.js";
 
-// ─── Helper ─────────────────────────────────────────────────────
+// ─── Helpers ────────────────────────────────────────────────────
 
-async function registerAgent(
-  governance: GovernanceInstance,
-  config: GovernToolConfig,
-  toolNames: string[],
-) {
-  const registration: AgentRegistration = {
-    id: config.agentId,
-    name: config.agentName,
-    framework: config.framework ?? "langchain",
-    owner: config.owner,
-    description: config.description,
-    version: config.version,
-    channels: config.channels,
-    tools: toolNames,
-    hasAuth: config.hasAuth,
-    hasGuardrails: config.hasGuardrails,
-    hasObservability: config.hasObservability,
-    hasAuditLog: true,
-    permissions: config.permissions,
-    metadata: config.metadata,
-  };
-  return governance.register(registration);
-}
-
-function createEnforcer(
-  governance: GovernanceInstance,
-  agentId: string,
-  agentLevel: number,
-  config: GovernToolConfig,
-) {
-  return async (toolName: string, input?: unknown): Promise<EnforcementDecision> => {
-    const action = config.actionMapper?.(toolName) ?? ("tool_call" as PolicyAction);
-
-    const decision = await governance.enforce({
-      agentId,
-      agentName: config.agentName,
-      agentLevel,
-      action,
-      tool: toolName,
-      input: typeof input === "object" && input !== null
-        ? input as Record<string, unknown>
-        : undefined,
-      sessionTokensUsed: config.sessionTokenTracker?.(),
-    });
-
-    handleOutcome(decision, toolName, config as OutcomeCallbacks);
-
-    return decision;
-  };
-}
-
-function createAuditor(governance: GovernanceInstance, agentId: string) {
-  return async (
-    toolName: string,
-    outcome: "success" | "failure",
-    detail?: Record<string, unknown>,
-  ): Promise<AuditEvent> => {
-    return governance.audit.log({
-      agentId,
-      eventType: "tool_call",
-      outcome,
-      severity: outcome === "failure" ? "warning" : "info",
-      detail: { tool: toolName, ...detail },
-    });
-  };
+/**
+ * LangChain DynamicTool inputs are commonly plain strings. An unchecked cast
+ * would set `ctx.input` to a string (typed as `Record<string, unknown>`), and
+ * condition evaluators reading properties off it would silently get undefined
+ * and never match — so anything that is not an object becomes `undefined`.
+ */
+function toArgRecord(input: unknown): Record<string, unknown> | undefined {
+  return typeof input === "object" && input !== null
+    ? input as Record<string, unknown>
+    : undefined;
 }
 
 /**
- * Build a result-scan closure bound to this governance + agent. Runs
- * the tool's raw output through the policy engine at stage `tool_result`
- * and returns either the original (allow) or a redacted detail object
- * (block / require_approval). No-op when `config.scanToolResults === false`.
+ * Build the governed `invoke` for one tool: enforce, run, scan the result at
+ * stage `tool_result`, audit. Shared by `governTool` and `governTools` so the
+ * single-tool and multi-tool paths can never drift.
  */
-function createResultScanner(
-  governance: GovernanceInstance,
-  agentId: string,
+function governedInvoke(
+  tool: LangChainTool,
+  core: AdapterCore,
   config: GovernToolConfig,
-) {
-  return async (
-    toolName: string,
-    args: Record<string, unknown> | undefined,
-    output: unknown,
-  ): Promise<unknown> => {
-    if (config.scanToolResults === false) return output;
-    const scanned = await scanToolResult({
-      governance, agentId, agentName: config.agentName, tool: toolName,
-      args, result: output,
-      injectionThreshold: config.toolResultInjectionThreshold,
-    });
-    return scanned.result;
+): (input: unknown, runConfig?: LangChainRunnableConfig) => Promise<unknown> {
+  return async (input, runConfig) => {
+    const args = toArgRecord(input);
+    await core.enforce(tool.name, args);
+
+    try {
+      const output = await tool.invoke(input, runConfig);
+      const finalOutput = config.scanToolResults === false
+        ? output
+        : (await core.scanResult({
+            tool: tool.name, args, result: output,
+            injectionThreshold: config.toolResultInjectionThreshold,
+          })).result;
+      await core.audit(tool.name, "success");
+      return finalOutput;
+    } catch (error) {
+      await core.audit(tool.name, "failure", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   };
+}
+
+function attach(
+  governance: GovernanceInstance,
+  config: GovernToolConfig,
+  toolNames: string[],
+): Promise<AdapterCore> {
+  return createAdapterCore(governance, config, {
+    tools: toolNames, framework: "langchain", callbacks: config,
+  });
 }
 
 // ─── Govern a Single Tool ───────────────────────────────────────
@@ -252,41 +191,15 @@ export async function governTool<T extends LangChainTool>(
   tool: T,
   config: GovernToolConfig,
 ): Promise<T & GovernedResult> {
-  const result = await registerAgent(governance, config, [tool.name]);
-  const enforce = createEnforcer(governance, result.id, result.level, config);
-  const audit = createAuditor(governance, result.id);
-  const scanResult = createResultScanner(governance, result.id, config);
+  const core = await attach(governance, config, [tool.name]);
 
   const governed = {
     ...tool,
-    agentId: result.id,
-    score: result.score,
-    level: result.level,
+    agentId: core.agentId,
+    score: core.score,
+    level: core.agentLevel,
     governance,
-    invoke: async (input: unknown, runConfig?: LangChainRunnableConfig): Promise<unknown> => {
-      await enforce(tool.name, input);
-
-      try {
-        const output = await tool.invoke(input, runConfig);
-        // Guard the cast — LangChain DynamicTool inputs are commonly
-        // strings. An unchecked cast would set ctx.input to a string
-        // (typed as Record<string, unknown>), and condition evaluators
-        // reading properties off it would silently get undefined and
-        // never match. Mirror the guard createEnforcer uses on its own
-        // input field.
-        const argRecord = typeof input === "object" && input !== null
-          ? input as Record<string, unknown>
-          : undefined;
-        const finalOutput = await scanResult(tool.name, argRecord, output);
-        await audit(tool.name, "success");
-        return finalOutput;
-      } catch (error) {
-        await audit(tool.name, "failure", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-        throw error;
-      }
-    },
+    invoke: governedInvoke(tool, core, config),
   };
 
   return governed as T & GovernedResult;
@@ -304,45 +217,18 @@ export async function governTools<T extends LangChainTool>(
   tools: T[],
   config: GovernToolConfig,
 ): Promise<{ tools: T[]; agentId: string; score: number; level: number }> {
-  const toolNames = tools.map((t) => t.name);
-  const result = await registerAgent(governance, config, toolNames);
-  const enforce = createEnforcer(governance, result.id, result.level, config);
-  const audit = createAuditor(governance, result.id);
-  const scanResult = createResultScanner(governance, result.id, config);
+  const core = await attach(governance, config, tools.map((t) => t.name));
 
   const governed = tools.map((tool) => ({
     ...tool,
-    invoke: async (input: unknown, runConfig?: LangChainRunnableConfig): Promise<unknown> => {
-      await enforce(tool.name, input);
-
-      try {
-        const output = await tool.invoke(input, runConfig);
-        // Guard the cast — LangChain DynamicTool inputs are commonly
-        // strings. An unchecked cast would set ctx.input to a string
-        // (typed as Record<string, unknown>), and condition evaluators
-        // reading properties off it would silently get undefined and
-        // never match. Mirror the guard createEnforcer uses on its own
-        // input field.
-        const argRecord = typeof input === "object" && input !== null
-          ? input as Record<string, unknown>
-          : undefined;
-        const finalOutput = await scanResult(tool.name, argRecord, output);
-        await audit(tool.name, "success");
-        return finalOutput;
-      } catch (error) {
-        await audit(tool.name, "failure", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-        throw error;
-      }
-    },
+    invoke: governedInvoke(tool, core, config),
   }));
 
   return {
     tools: governed as T[],
-    agentId: result.id,
-    score: result.score,
-    level: result.level,
+    agentId: core.agentId,
+    score: core.score,
+    level: core.agentLevel,
   };
 }
 

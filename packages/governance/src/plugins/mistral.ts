@@ -20,9 +20,7 @@
  * ```
  */
 
-import type { GovernanceInstance, AuditEvent } from "../index";
-import type { EnforcementDecision, PolicyAction } from "../policy";
-import type { AgentRegistration } from "../types";
+import type { GovernanceInstance } from "../index";
 import type {
   MistralToolExecutor, MistralToolCall,
   GovernMistralConfig, GovernedMistralResult,
@@ -34,8 +32,8 @@ export type {
   GovernMistralConfig, GovernedMistralResult,
 } from "./mistral-types.js";
 
-import { handleOutcome, GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outcome-handler.js";
-import type { OutcomeCallbacks } from "./outcome-handler.js";
+import { GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outcome-handler.js";
+import { createAdapterCore } from "./adapter-core.js";
 
 // ─── Blocked Error ──────────────────────────────────────────
 
@@ -55,49 +53,6 @@ export {
   createGovernedChatStream,
 } from "./mistral-messages.js";
 
-// ─── Shared Helpers ─────────────────────────────────────────
-
-function buildRegistration(config: GovernMistralConfig, toolNames: string[]): AgentRegistration {
-  return {
-    id: config.agentId,
-    name: config.agentName,
-    framework: config.framework ?? "mistral",
-    owner: config.owner,
-    description: config.description,
-    version: config.version,
-    channels: config.channels,
-    tools: toolNames,
-    hasAuth: config.hasAuth,
-    hasGuardrails: config.hasGuardrails,
-    hasObservability: config.hasObservability,
-    hasAuditLog: true,
-    permissions: config.permissions,
-    metadata: config.metadata,
-  };
-}
-
-function createEnforcer(governance: GovernanceInstance, agentId: string, agentLevel: number, config: GovernMistralConfig) {
-  return async (toolName: string, input?: Record<string, unknown>): Promise<EnforcementDecision> => {
-    const action = config.actionMapper?.(toolName) ?? ("tool_call" as PolicyAction);
-    const decision = await governance.enforce({
-      agentId, agentName: config.agentName, agentLevel,
-      action, tool: toolName, input,
-      sessionTokensUsed: config.sessionTokenTracker?.(),
-    });
-    handleOutcome(decision, toolName, config as OutcomeCallbacks);
-    return decision;
-  };
-}
-
-function createAuditor(governance: GovernanceInstance, agentId: string) {
-  return (toolName: string, outcome: "success" | "failure", detail?: Record<string, unknown>): Promise<AuditEvent> =>
-    governance.audit.log({
-      agentId, eventType: "tool_call", outcome,
-      severity: outcome === "failure" ? "warning" : "info",
-      detail: { tool: toolName, ...detail },
-    });
-}
-
 // ─── Main Export ────────────────────────────────────────────
 
 export async function governMistralTools(
@@ -105,28 +60,17 @@ export async function governMistralTools(
   tools: MistralToolExecutor[],
   config: GovernMistralConfig,
 ): Promise<GovernedMistralResult> {
-  const toolNames = tools.map((t) => t.name);
-  const reg = buildRegistration(config, toolNames);
-  const result = await governance.register(reg);
-
-  const enforce = createEnforcer(governance, result.id, result.level, config);
-  const audit = createAuditor(governance, result.id);
+  const core = await createAdapterCore(governance, config, {
+    tools: tools.map((t) => t.name), framework: "mistral", callbacks: config,
+  });
+  const enforce = (toolName: string, input?: Record<string, unknown>) => core.enforce(toolName, input);
+  const audit = core.audit;
 
   const toolMap = new Map(tools.map((t) => [t.name, t]));
 
   const governedTools: MistralToolExecutor[] = tools.map((tool) => ({
     ...tool,
-    execute: async (args: Record<string, unknown>) => {
-      await enforce(tool.name, args);
-      try {
-        const output = await tool.execute(args);
-        await audit(tool.name, "success");
-        return output;
-      } catch (error) {
-        await audit(tool.name, "failure", { error: error instanceof Error ? error.message : String(error) });
-        throw error;
-      }
-    },
+    execute: (args: Record<string, unknown>) => core.run(tool.name, args, () => tool.execute(args)),
   }));
 
   async function handleToolCall(toolCall: MistralToolCall): Promise<{ toolCallId: string; content: string }> {
@@ -138,28 +82,27 @@ export async function governMistralTools(
     const args = (typeof toolCall.function.arguments === "string"
       ? JSON.parse(toolCall.function.arguments)
       : toolCall.function.arguments) as Record<string, unknown>;
+    const name = toolCall.function.name;
     try {
-      await enforce(toolCall.function.name, args);
-      const output = await executor.execute(args);
-      await audit(toolCall.function.name, "success");
+      const output = await core.run(name, args, () => executor.execute(args));
       return { toolCallId, content: typeof output === "string" ? output : JSON.stringify(output) };
     } catch (error) {
       if (error instanceof GovernanceBlockedError || error instanceof GovernanceApprovalRequiredError) {
-        await audit(toolCall.function.name, "failure", { reason: (error as GovernanceBlockedError).decision.reason });
+        // core.run() audits its own failures; a governance refusal is
+        // audited here because it happens before the tool ever runs.
+        await audit(name, "failure", { reason: (error as GovernanceBlockedError).decision.reason });
         return { toolCallId, content: `Blocked: ${(error as GovernanceBlockedError).decision.reason}` };
       }
-      const msg = error instanceof Error ? error.message : String(error);
-      await audit(toolCall.function.name, "failure", { error: msg });
-      return { toolCallId, content: msg };
+      return { toolCallId, content: error instanceof Error ? error.message : String(error) };
     }
   }
 
   return {
     tools: governedTools,
     handleToolCall,
-    agentId: result.id,
-    score: result.score,
-    level: result.level,
+    agentId: core.agentId,
+    score: core.score,
+    level: core.agentLevel,
     governance,
     enforce,
     audit,

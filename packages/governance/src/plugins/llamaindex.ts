@@ -23,9 +23,7 @@
  * ```
  */
 
-import type { GovernanceInstance, AuditEvent } from "../index";
-import type { EnforcementDecision, PolicyAction } from "../policy";
-import type { AgentRegistration } from "../types";
+import type { GovernanceInstance } from "../index";
 import type {
   LlamaIndexTool, LlamaIndexAgent, LlamaIndexJSONValue,
   GovernLlamaIndexConfig, GovernedLlamaIndexToolsResult, GovernedLlamaIndexAgentResult,
@@ -38,9 +36,8 @@ export type {
   GovernLlamaIndexConfig, GovernedLlamaIndexToolsResult, GovernedLlamaIndexAgentResult,
 } from "./llamaindex-types.js";
 
-import { handleOutcome } from "./outcome-handler.js";
-import type { OutcomeCallbacks } from "./outcome-handler.js";
-import { scanToolResult } from "../tool-result-scan.js";
+import { createAdapterCore } from "./adapter-core.js";
+import type { AdapterCore } from "./adapter-core.js";
 
 // ─── Pre/post LLM wrapper ───────────────────────────────────
 // See ./llamaindex-llm.ts for docs + examples.
@@ -58,99 +55,63 @@ export { wrapLlamaLLM } from "./llamaindex-llm.js";
 
 export { GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outcome-handler.js";
 
-// ─── Shared Helpers ─────────────────────────────────────────
-
-function buildRegistration(config: GovernLlamaIndexConfig, toolNames: string[]): AgentRegistration {
-  return {
-    id: config.agentId,
-    name: config.agentName,
-    framework: config.framework ?? "custom",
-    owner: config.owner,
-    description: config.description,
-    version: config.version,
-    channels: config.channels,
-    tools: toolNames,
-    hasAuth: config.hasAuth,
-    hasGuardrails: config.hasGuardrails,
-    hasObservability: config.hasObservability,
-    hasAuditLog: true,
-    permissions: config.permissions,
-    metadata: { ...config.metadata, runtime: "llamaindex" },
-  };
-}
-
-function createEnforcer(governance: GovernanceInstance, agentId: string, agentLevel: number, config: GovernLlamaIndexConfig) {
-  return async (toolName: string, input?: Record<string, unknown>): Promise<EnforcementDecision> => {
-    const action = config.actionMapper?.(toolName) ?? ("tool_call" as PolicyAction);
-    const decision = await governance.enforce({
-      agentId, agentName: config.agentName, agentLevel,
-      action, tool: toolName, input,
-      sessionTokensUsed: config.sessionTokenTracker?.(),
-    });
-    handleOutcome(decision, toolName, config as OutcomeCallbacks);
-    return decision;
-  };
-}
-
-function createAuditor(governance: GovernanceInstance, agentId: string) {
-  return (toolName: string, outcome: "success" | "failure", detail?: Record<string, unknown>): Promise<AuditEvent> =>
-    governance.audit.log({
-      agentId, eventType: "tool_call", outcome,
-      severity: outcome === "failure" ? "warning" : "info",
-      detail: { tool: toolName, ...detail },
-    });
+/**
+ * Register once, with the runtime marker LlamaIndex agents carry in their
+ * registration metadata.
+ */
+function attach(
+  governance: GovernanceInstance,
+  config: GovernLlamaIndexConfig,
+  toolNames: string[],
+): Promise<AdapterCore> {
+  return createAdapterCore(
+    governance,
+    { ...config, metadata: { ...config.metadata, runtime: "llamaindex" } },
+    { tools: toolNames, framework: "custom", callbacks: config },
+  );
 }
 
 /**
- * Build a result-scan closure bound to this governance + agent. Runs the
- * tool's raw output through the policy engine at stage `tool_result` and
- * returns either the original (allow) or a redacted detail object (block).
+ * Run the tool's raw output through the policy engine at stage `tool_result`
+ * and return either the original (allow) or a redacted detail object (block).
  * No-op when `config.scanToolResults === false`. Default-on.
  */
-function createResultScanner(
-  governance: GovernanceInstance, agentId: string, config: GovernLlamaIndexConfig,
-) {
-  return async (toolName: string, args: Record<string, unknown> | undefined, output: LlamaIndexJSONValue): Promise<LlamaIndexJSONValue> => {
-    if (config.scanToolResults === false) return output;
-    const scanned = await scanToolResult({
-      governance, agentId, agentName: config.agentName, tool: toolName,
-      args, result: output,
-      injectionThreshold: config.toolResultInjectionThreshold,
-    });
-    // BlockedToolResult.ruleId is `string | null`, but LlamaIndexJSONValue
-    // explicitly excludes `null` per the SDK contract. Coerce on block so
-    // downstream LlamaIndex JSON walkers don't trip on the null property.
-    if (scanned.blocked) {
-      const blocked = scanned.result as { blocked: true; reason: string; ruleId: string | null };
-      return {
-        blocked: true,
-        reason: blocked.reason,
-        ruleId: blocked.ruleId ?? "unknown",
-      };
-    }
-    return scanned.result as LlamaIndexJSONValue;
-  };
+async function scanOutput(
+  core: AdapterCore,
+  config: GovernLlamaIndexConfig,
+  toolName: string,
+  args: Record<string, unknown> | undefined,
+  output: LlamaIndexJSONValue,
+): Promise<LlamaIndexJSONValue> {
+  if (config.scanToolResults === false) return output;
+  const scanned = await core.scanResult({
+    tool: toolName, args, result: output,
+    injectionThreshold: config.toolResultInjectionThreshold,
+  });
+  // BlockedToolResult.ruleId is `string | null`, but LlamaIndexJSONValue
+  // explicitly excludes `null` per the SDK contract. Coerce on block so
+  // downstream LlamaIndex JSON walkers don't trip on the null property.
+  if (scanned.blocked) {
+    const blocked = scanned.result as { blocked: true; reason: string; ruleId: string | null };
+    return { blocked: true, reason: blocked.reason, ruleId: blocked.ruleId ?? "unknown" };
+  }
+  return scanned.result as LlamaIndexJSONValue;
 }
 
-function wrapTool(
-  tool: LlamaIndexTool,
-  enforce: ReturnType<typeof createEnforcer>,
-  audit: ReturnType<typeof createAuditor>,
-  scanResult: ReturnType<typeof createResultScanner>,
-): LlamaIndexTool {
+function wrapTool(tool: LlamaIndexTool, core: AdapterCore, config: GovernLlamaIndexConfig): LlamaIndexTool {
   if (!tool.call) return tool;
   const toolName = tool.metadata.name;
   return {
     ...tool,
     call: async (input: Record<string, unknown>): Promise<LlamaIndexJSONValue> => {
-      await enforce(toolName, input);
+      await core.enforce(toolName, input);
       try {
         const output = await tool.call!(input);
-        const finalOutput = await scanResult(toolName, input, output);
-        await audit(toolName, "success");
+        const finalOutput = await scanOutput(core, config, toolName, input, output);
+        await core.audit(toolName, "success");
         return finalOutput;
       } catch (error) {
-        await audit(toolName, "failure", { error: error instanceof Error ? error.message : String(error) });
+        await core.audit(toolName, "failure", { error: error instanceof Error ? error.message : String(error) });
         throw error;
       }
     },
@@ -164,22 +125,16 @@ export async function governLlamaIndexTools(
   tools: LlamaIndexTool[],
   config: GovernLlamaIndexConfig,
 ): Promise<GovernedLlamaIndexToolsResult> {
-  const toolNames = tools.map((t) => t.metadata.name);
-  const reg = buildRegistration(config, toolNames);
-  const result = await governance.register(reg);
-
-  const enforce = createEnforcer(governance, result.id, result.level, config);
-  const audit = createAuditor(governance, result.id);
-  const scanResult = createResultScanner(governance, result.id, config);
+  const core = await attach(governance, config, tools.map((t) => t.metadata.name));
 
   return {
-    tools: tools.map((tool) => wrapTool(tool, enforce, audit, scanResult)),
-    agentId: result.id,
-    score: result.score,
-    level: result.level,
+    tools: tools.map((tool) => wrapTool(tool, core, config)),
+    agentId: core.agentId,
+    score: core.score,
+    level: core.agentLevel,
     governance,
-    enforce,
-    audit,
+    enforce: (toolName, input) => core.enforce(toolName, input),
+    audit: core.audit,
   };
 }
 
@@ -190,21 +145,15 @@ export async function governLlamaIndexAgent(
   agent: LlamaIndexAgent,
   config: GovernLlamaIndexConfig,
 ): Promise<GovernedLlamaIndexAgentResult> {
-  const toolNames = agent.tools.map((t) => t.metadata.name);
-  const reg = buildRegistration(config, toolNames);
-  const result = await governance.register(reg);
-
-  const enforce = createEnforcer(governance, result.id, result.level, config);
-  const audit = createAuditor(governance, result.id);
-  const scanResult = createResultScanner(governance, result.id, config);
+  const core = await attach(governance, config, agent.tools.map((t) => t.metadata.name));
 
   return {
-    agent: { ...agent, tools: agent.tools.map((tool) => wrapTool(tool, enforce, audit, scanResult)) },
-    agentId: result.id,
-    score: result.score,
-    level: result.level,
+    agent: { ...agent, tools: agent.tools.map((tool) => wrapTool(tool, core, config)) },
+    agentId: core.agentId,
+    score: core.score,
+    level: core.agentLevel,
     governance,
-    enforce,
-    audit,
+    enforce: (toolName, input) => core.enforce(toolName, input),
+    audit: core.audit,
   };
 }

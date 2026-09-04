@@ -25,7 +25,7 @@ const AS_OF = new Date("2026-09-04T00:00:00Z");
 /** A governed instance with enough configured for the mappings to score above zero. */
 async function fixture(): Promise<{ governance: GovernanceInstance; agents: StoredAgent[] }> {
   const governance = createGovernance({
-    rules: [blockTools(["shell_exec"]), requireApproval(["wire_transfer"]), tokenBudget(10_000)],
+    rules: [blockTools(["shell_exec"]), requireApproval(["payment"]), tokenBudget(10_000)],
   });
   await governance.register({
     name: "sales-agent", framework: "mastra", owner: "sales", tools: ["crm_update"],
