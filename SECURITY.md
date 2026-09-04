@@ -38,11 +38,20 @@ The following are considered security issues:
 - Kill switch circumvention
 - Authentication/authorization issues in remote enforcement
 
+Also in scope: a detector or policy condition whose evaluation time grows
+super-linearly on inputs within the configured `maxInputLength` (regex
+backtracking that lets a tool result stall the event loop is a denial of
+service, not a performance nit — see `injection-redos.test.ts`).
+
 The following are **not** security issues:
 
 - Injection detection false positives/negatives for edge cases (report as a regular issue)
-- Performance degradation under extreme input sizes
+- Performance degradation on inputs beyond the configured size limits
 - Issues in peer dependency frameworks
+
+The guarantees the SDK makes, and the limits it states, are listed in
+[docs/guarantees.md](./docs/guarantees.md); the threat model is in
+[docs/threat-model.md](./docs/threat-model.md).
 
 ## Responsible Disclosure
 

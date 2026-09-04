@@ -36,6 +36,7 @@ const transforms = [
   [/\]\(\.\/CONTRIBUTING\.md\)/g, `](https://github.com/${REPO}/blob/main/CONTRIBUTING.md)`],
   [/\]\(\.\/SECURITY\.md\)/g, `](https://github.com/${REPO}/blob/main/SECURITY.md)`],
   [/\]\(\.\/CODE_OF_CONDUCT\.md\)/g, `](https://github.com/${REPO}/blob/main/CODE_OF_CONDUCT.md)`],
+  [/\]\(\.\/docs\/([^)]+)\)/g, `](https://github.com/${REPO}/blob/main/docs/$1)`],
 ];
 
 let synced = root;
