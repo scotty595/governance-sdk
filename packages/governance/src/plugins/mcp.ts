@@ -47,7 +47,7 @@ export type {
   MCPToolCallHandler, MCPResourceReadHandler,
 } from "./mcp-types.js";
 
-import { handleOutcome, GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outcome-handler.js";
+import { handleOutcome, GovernanceBlockedError } from "./outcome-handler.js";
 import type { OutcomeCallbacks } from "./outcome-handler.js";
 
 // ─── Blocked Error ──────────────────────────────────────────
@@ -58,6 +58,7 @@ export { GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outco
 
 function buildRegistration(config: GovernMCPConfig): AgentRegistration {
   return {
+    id: config.agentId,
     name: config.agentName,
     framework: config.framework ?? "mcp",
     owner: config.owner,
@@ -74,11 +75,11 @@ function buildRegistration(config: GovernMCPConfig): AgentRegistration {
   };
 }
 
-function createEnforcer(governance: GovernanceInstance, agentId: string, config: GovernMCPConfig) {
+function createEnforcer(governance: GovernanceInstance, agentId: string, agentLevel: number, config: GovernMCPConfig) {
   return async (toolName: string, input?: Record<string, unknown>): Promise<EnforcementDecision> => {
     const action = config.actionMapper?.(toolName) ?? ("tool_call" as PolicyAction);
     const decision = await governance.enforce({
-      agentId, agentName: config.agentName, agentLevel: 0,
+      agentId, agentName: config.agentName, agentLevel,
       action, tool: toolName, input,
       sessionTokensUsed: config.sessionTokenTracker?.(),
     });
@@ -113,7 +114,7 @@ export async function createGovernedMCP(
   const reg = buildRegistration(config);
   const result = await governance.register(reg);
 
-  const enforce = createEnforcer(governance, result.id, config);
+  const enforce = createEnforcer(governance, result.id, result.level, config);
   const audit = createAuditor(governance, result.id);
 
   const governResources = config.governResources !== false;
@@ -204,7 +205,7 @@ export async function createGovernedMCP(
       const resourceAction = config.resourceActionMapper?.(uri) ?? ("data_access" as PolicyAction);
 
       const decision = await governance.enforce({
-        agentId: result.id, agentName: config.agentName, agentLevel: 0,
+        agentId: result.id, agentName: config.agentName, agentLevel: result.level,
         action: resourceAction, tool: uri,
         metadata: { resourceUri: uri },
       });

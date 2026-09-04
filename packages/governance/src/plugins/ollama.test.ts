@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { createGovernance, blockTools } from "../index";
+import { createGovernance, blockTools, requireLevel } from "../index";
 import { governOllamaTools, GovernanceBlockedError } from "./ollama";
 import type { OllamaToolExecutor, OllamaToolCall } from "./ollama";
 
@@ -218,5 +218,36 @@ describe("handleToolCall", () => {
 
     const response = await result.handleToolCall(createMockToolCall("data"));
     assert.ok(response.includes("42"));
+  });
+});
+
+// ─── Agent level + stable id ────────────────────────────────
+
+describe("governOllamaTools — agent level + stable id", () => {
+  test("carries the registered level into enforcement so requireLevel(1) allows a scored agent", async () => {
+    const gov = createGovernance({ rules: [requireLevel(1)] });
+    const result = await governOllamaTools(gov, [createMockTool("search", "found")], {
+      agentName: "scored-ollama",
+      owner: "test-team",
+      hasAuth: true,
+      hasGuardrails: true,
+      hasObservability: true,
+    });
+
+    assert.ok(result.level >= 1, `expected level >= 1, got ${result.level}`);
+    assert.equal(await result.tools[0].execute({ query: "hello" }), "found");
+    assert.equal((await result.enforce("search")).blocked, false);
+  });
+
+  test("forwards a stable agentId to register so restarts reuse the agent row", async () => {
+    const gov = createGovernance();
+    const config = { agentId: "ollama-stable-id", agentName: "ollama-agent", owner: "test-team" };
+
+    const first = await governOllamaTools(gov, [createMockTool("search")], config);
+    const second = await governOllamaTools(gov, [createMockTool("search")], config);
+
+    assert.equal(first.agentId, "ollama-stable-id");
+    assert.equal(second.agentId, "ollama-stable-id");
+    assert.equal((await gov.storage.listAgents()).length, 1);
   });
 });

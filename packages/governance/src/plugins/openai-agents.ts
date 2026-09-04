@@ -41,7 +41,7 @@ export type {
   GovernAgentConfig, GovernedAgentResult, GovernedToolsResult,
 } from "./openai-agents-types.js";
 
-import { handleOutcome, GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outcome-handler.js";
+import { handleOutcome } from "./outcome-handler.js";
 import type { OutcomeCallbacks } from "./outcome-handler.js";
 import { scanToolResult } from "../tool-result-scan.js";
 
@@ -66,6 +66,7 @@ export {
 
 function buildRegistration(config: GovernAgentConfig, toolNames: string[], description?: string): AgentRegistration {
   return {
+    id: config.agentId,
     name: config.agentName,
     framework: config.framework ?? "openai",
     owner: config.owner,
@@ -82,11 +83,11 @@ function buildRegistration(config: GovernAgentConfig, toolNames: string[], descr
   };
 }
 
-function createEnforcer(governance: GovernanceInstance, agentId: string, config: GovernAgentConfig) {
+function createEnforcer(governance: GovernanceInstance, agentId: string, agentLevel: number, config: GovernAgentConfig) {
   return async (toolName: string, input?: Record<string, unknown>): Promise<EnforcementDecision> => {
     const action = config.actionMapper?.(toolName) ?? ("tool_call" as PolicyAction);
     const decision = await governance.enforce({
-      agentId, agentName: config.agentName, agentLevel: 0,
+      agentId, agentName: config.agentName, agentLevel,
       action, tool: toolName, input,
       sessionTokensUsed: config.sessionTokenTracker?.(),
     });
@@ -139,7 +140,7 @@ function wrapTool(
   if (tool.invoke) {
     wrapped.invoke = async (ctx, args, details) => {
       const parsed = JSON.parse(args) as Record<string, unknown>;
-      const decision = await enforce(tool.name, parsed);
+      await enforce(tool.name, parsed);
       try {
         const output = await tool.invoke!(ctx, args, details);
         const finalOutput = await scanResult(tool.name, parsed, output);
@@ -162,7 +163,7 @@ function wrapTool(
   // Wrap legacy execute (governance wrapper convenience — does not exist in SDK)
   if (tool.execute) {
     wrapped.execute = async (args: Record<string, unknown>) => {
-      const decision = await enforce(tool.name, args);
+      await enforce(tool.name, args);
       try {
         const output = await tool.execute!(args);
         const finalOutput = await scanResult(tool.name, args, output);
@@ -190,7 +191,7 @@ export async function governAgent<T extends OpenAIAgent>(
   const reg = buildRegistration(config, toolNames, desc);
   const result = await governance.register(reg);
 
-  const enforce = createEnforcer(governance, result.id, config);
+  const enforce = createEnforcer(governance, result.id, result.level, config);
   const audit = createAuditor(governance, result.id);
   const scanResult = createResultScanner(governance, result.id, config);
   const wrappedTools = (agent.tools ?? []).map((tool) => tool.type === "function" ? wrapTool(tool, enforce, audit, scanResult) : tool);
@@ -217,7 +218,7 @@ export async function governTools(
   const reg = buildRegistration(config, toolNames);
   const result = await governance.register(reg);
 
-  const enforce = createEnforcer(governance, result.id, config);
+  const enforce = createEnforcer(governance, result.id, result.level, config);
   const audit = createAuditor(governance, result.id);
   const scanResult = createResultScanner(governance, result.id, config);
 

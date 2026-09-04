@@ -77,8 +77,18 @@ export interface OpenAIOutputGuardrail {
 }
 
 export interface OpenAIGuardrailConfig extends OutcomeCallbacks {
+  /**
+   * Bring-your-own agent id. This wrapper never calls `gov.register()`;
+   * pass the `id` returned by your own registration (or a tool adapter's
+   * `agentId`) so enforcement and audit bind to that agent row.
+   */
   agentId: string;
   agentName?: string;
+  /**
+   * Governance level for `agent_level` rules such as `requireLevel()`. Pass
+   * the `level` returned by `gov.register()`; when omitted the engine
+   * treats the agent as level 0 and `requireLevel(1+)` blocks every call.
+   */
   agentLevel?: number;
   /** Name used in the guardrail record (default: governance.input / .output). */
   name?: string;

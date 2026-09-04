@@ -59,6 +59,7 @@ export {
 
 function buildRegistration(config: GovernMistralConfig, toolNames: string[]): AgentRegistration {
   return {
+    id: config.agentId,
     name: config.agentName,
     framework: config.framework ?? "mistral",
     owner: config.owner,
@@ -75,11 +76,11 @@ function buildRegistration(config: GovernMistralConfig, toolNames: string[]): Ag
   };
 }
 
-function createEnforcer(governance: GovernanceInstance, agentId: string, config: GovernMistralConfig) {
+function createEnforcer(governance: GovernanceInstance, agentId: string, agentLevel: number, config: GovernMistralConfig) {
   return async (toolName: string, input?: Record<string, unknown>): Promise<EnforcementDecision> => {
     const action = config.actionMapper?.(toolName) ?? ("tool_call" as PolicyAction);
     const decision = await governance.enforce({
-      agentId, agentName: config.agentName, agentLevel: 0,
+      agentId, agentName: config.agentName, agentLevel,
       action, tool: toolName, input,
       sessionTokensUsed: config.sessionTokenTracker?.(),
     });
@@ -108,7 +109,7 @@ export async function governMistralTools(
   const reg = buildRegistration(config, toolNames);
   const result = await governance.register(reg);
 
-  const enforce = createEnforcer(governance, result.id, config);
+  const enforce = createEnforcer(governance, result.id, result.level, config);
   const audit = createAuditor(governance, result.id);
 
   const toolMap = new Map(tools.map((t) => [t.name, t]));
@@ -116,7 +117,7 @@ export async function governMistralTools(
   const governedTools: MistralToolExecutor[] = tools.map((tool) => ({
     ...tool,
     execute: async (args: Record<string, unknown>) => {
-      const decision = await enforce(tool.name, args);
+      await enforce(tool.name, args);
       try {
         const output = await tool.execute(args);
         await audit(tool.name, "success");

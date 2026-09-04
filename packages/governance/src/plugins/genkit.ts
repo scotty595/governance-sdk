@@ -36,7 +36,7 @@ export type {
   GovernGenkitConfig, GovernedGenkitToolsResult, GovernedGenkitFlowResult,
 } from "./genkit-types.js";
 
-import { handleOutcome, GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outcome-handler.js";
+import { handleOutcome } from "./outcome-handler.js";
 import type { OutcomeCallbacks } from "./outcome-handler.js";
 import { scanToolResult } from "../tool-result-scan.js";
 
@@ -62,6 +62,7 @@ export {
 
 function buildRegistration(config: GovernGenkitConfig, toolNames: string[]): AgentRegistration {
   return {
+    id: config.agentId,
     name: config.agentName,
     framework: config.framework ?? "genkit",
     owner: config.owner,
@@ -78,11 +79,11 @@ function buildRegistration(config: GovernGenkitConfig, toolNames: string[]): Age
   };
 }
 
-function createEnforcer(governance: GovernanceInstance, agentId: string, config: GovernGenkitConfig) {
+function createEnforcer(governance: GovernanceInstance, agentId: string, agentLevel: number, config: GovernGenkitConfig) {
   return async (toolName: string, input?: Record<string, unknown>): Promise<EnforcementDecision> => {
     const action = config.actionMapper?.(toolName) ?? ("tool_call" as PolicyAction);
     const decision = await governance.enforce({
-      agentId, agentName: config.agentName, agentLevel: 0,
+      agentId, agentName: config.agentName, agentLevel,
       action, tool: toolName, input,
       sessionTokensUsed: config.sessionTokenTracker?.(),
     });
@@ -134,7 +135,7 @@ function wrapTool(
     ...tool,
     call: async (input: unknown, options?: Record<string, unknown>): Promise<unknown> => {
       const inputRecord = typeof input === "object" && input !== null ? input as Record<string, unknown> : { input };
-      const decision = await enforce(tool.name, inputRecord);
+      await enforce(tool.name, inputRecord);
       try {
         const output = await tool.call(input, options);
         // Scan tool result before returning to the agent loop. On block
@@ -161,7 +162,7 @@ export async function governGenkitTools(
   const reg = buildRegistration(config, toolNames);
   const result = await governance.register(reg);
 
-  const enforce = createEnforcer(governance, result.id, config);
+  const enforce = createEnforcer(governance, result.id, result.level, config);
   const audit = createAuditor(governance, result.id);
   const scanResult = createResultScanner(governance, result.id, config);
 
@@ -186,7 +187,7 @@ export async function governGenkitFlow(
   const reg = buildRegistration(config, [flow.name]);
   const result = await governance.register(reg);
 
-  const enforce = createEnforcer(governance, result.id, config);
+  const enforce = createEnforcer(governance, result.id, result.level, config);
   const audit = createAuditor(governance, result.id);
 
   const governedFlow: GenkitFlow = {

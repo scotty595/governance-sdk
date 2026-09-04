@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createGovernance, blockTools } from "../index";
+import { createGovernance, blockTools, requireLevel } from "../index";
 import { governTool, governTools, GovernanceBlockedError } from "./langchain";
 
 // Mock LangChain tool shape
@@ -186,5 +186,37 @@ describe("governTools (LangChain multiple tools)", () => {
 
     assert.equal(result.tools[0].name, "my_tool");
     assert.equal(result.tools[0].description, "Mock: my_tool");
+  });
+});
+
+// ─── Agent level + stable id ────────────────────────────────
+
+describe("LangChain — agent level + stable id", () => {
+  it("carries the registered level into enforcement so requireLevel(1) allows a scored agent", async () => {
+    const gov = createGovernance({ rules: [requireLevel(1)] });
+    const result = await governTools(gov, [mockLCTool("search", async () => "found")], {
+      agentName: "scored-lc",
+      owner: "research",
+      hasAuth: true,
+      hasGuardrails: true,
+      hasObservability: true,
+    });
+
+    assert.ok(result.level >= 1, `expected level >= 1, got ${result.level}`);
+    assert.equal(await result.tools[0].invoke({ query: "hello" }), "found");
+  });
+
+  it("forwards a stable agentId to register so restarts reuse the agent row", async () => {
+    const gov = createGovernance();
+    const config = { agentId: "langchain-stable-id", agentName: "lc-agent", owner: "research" };
+
+    const first = await governTools(gov, [mockLCTool("search", async () => "ok")], config);
+    const second = await governTools(gov, [mockLCTool("search", async () => "ok")], config);
+    const single = await governTool(gov, mockLCTool("search", async () => "ok"), config);
+
+    assert.equal(first.agentId, "langchain-stable-id");
+    assert.equal(second.agentId, "langchain-stable-id");
+    assert.equal(single.agentId, "langchain-stable-id");
+    assert.equal((await gov.storage.listAgents()).length, 1);
   });
 });

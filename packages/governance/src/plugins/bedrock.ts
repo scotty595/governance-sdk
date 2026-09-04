@@ -43,7 +43,7 @@ export type {
   GovernBedrockConfig, GovernedBedrockResult, BedrockInvokeHandler,
 } from "./bedrock-types.js";
 
-import { handleOutcome, GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outcome-handler.js";
+import { handleOutcome, GovernanceBlockedError } from "./outcome-handler.js";
 import type { OutcomeCallbacks } from "./outcome-handler.js";
 import { enforcePreprocess, enforcePostprocess } from "./pre-post-enforce.js";
 
@@ -55,6 +55,7 @@ export { GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outco
 
 function buildRegistration(config: GovernBedrockConfig): AgentRegistration {
   return {
+    id: config.agentId,
     name: config.agentName,
     framework: config.framework ?? "bedrock",
     owner: config.owner,
@@ -71,11 +72,11 @@ function buildRegistration(config: GovernBedrockConfig): AgentRegistration {
   };
 }
 
-function createEnforcer(governance: GovernanceInstance, agentId: string, config: GovernBedrockConfig) {
+function createEnforcer(governance: GovernanceInstance, agentId: string, agentLevel: number, config: GovernBedrockConfig) {
   return async (toolName: string, input?: Record<string, unknown>): Promise<EnforcementDecision> => {
     const action = config.actionMapper?.(toolName) ?? ("tool_call" as PolicyAction);
     const decision = await governance.enforce({
-      agentId, agentName: config.agentName, agentLevel: 0,
+      agentId, agentName: config.agentName, agentLevel,
       action, tool: toolName, input,
       sessionTokensUsed: config.sessionTokenTracker?.(),
     });
@@ -109,7 +110,7 @@ export async function createGovernedBedrock(
   const reg = buildRegistration(config);
   const result = await governance.register(reg);
 
-  const enforce = createEnforcer(governance, result.id, config);
+  const enforce = createEnforcer(governance, result.id, result.level, config);
   const audit = createAuditor(governance, result.id);
 
   async function invokeAgent(input: BedrockInvokeAgentInput): Promise<unknown> {
