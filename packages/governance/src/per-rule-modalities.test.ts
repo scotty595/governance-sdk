@@ -1,8 +1,8 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { createPolicyEngine } from "./policy-entry.js";
-import { getScanText, type PolicyRule, type EnforcementContext } from "./policy.js";
-import { conditionSupportsModalities } from "./scan/multi-modal.js";
+import { getScanText, type PolicyRule, type EnforcementContext } from "@governance-sdk/core/policy.js";
+import { conditionSupportsModalities } from "@governance-sdk/plugins/scan/multi-modal.js";
 
 /**
  * Per-rule modality scanning — each content-scanning rule decides which

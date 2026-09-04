@@ -1,0 +1,36 @@
+{
+  "name": "@governance-sdk/core",
+  "version": "0.22.0",
+  "private": true,
+  "description": "The governance kernel: policy engine, audit chain, storage contract, plugin contract. No detector, no standards mapping, no scoring model.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./*.js": {
+      "types": "./dist/*.d.ts",
+      "import": "./dist/*.js"
+    },
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "import": "./dist/*.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test src/*.test.ts src/**/*.test.ts"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "tsx": "^4.22.4",
+    "typescript": "^5.7.0",
+    "@types/node": "^25.4.0",
+    "governance-sdk": "0.22.0"
+  }
+}

@@ -5,7 +5,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { createGovernance, blockTools, maskSensitiveOutput, requireToolApproval } from "./index.js";
-import type { PolicyRule } from "./policy.js";
+import type { PolicyRule } from "@governance-sdk/core/policy.js";
 
 describe("decision detail", () => {
   it("carries stage, condition type and a remedy on block", async () => {

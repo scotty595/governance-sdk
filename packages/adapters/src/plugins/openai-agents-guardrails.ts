@@ -1,0 +1,264 @@
+/**
+ * governance-sdk OpenAI Agents — input/output guardrails (pre/post)
+ *
+ * OpenAI's Agents SDK has first-class `inputGuardrails` and `outputGuardrails`
+ * on the Agent config. Each guardrail is `{ name, execute }` where `execute`
+ * returns `{ outputInfo, tripwireTriggered }`. Tripping a wire halts the run.
+ *
+ * We expose two builders that produce SDK-compatible guardrails wired to
+ * governance pre/post enforcement:
+ *
+ *   - `createInputGuardrail(gov, config)`
+ *   - `createOutputGuardrail(gov, config)`
+ *
+ * On block/require_approval we set `tripwireTriggered: true` — the Agents
+ * runtime halts and surfaces `outputInfo` (the EnforcementDecision) to the
+ * caller. On warn/allow we pass through. Mask outcomes fire the onMask
+ * callback; the Agents SDK doesn't support output rewriting via guardrail,
+ * so mask → tripwire with the masked text in outputInfo for the caller to
+ * handle.
+ *
+ * @example
+ * ```ts
+ * import { Agent } from '@openai/agents';
+ * import { createGovernance } from 'governance-sdk';
+ * import {
+ *   createInputGuardrail,
+ *   createOutputGuardrail,
+ * } from 'governance-sdk/plugins/openai-agents';
+ *
+ * const gov = createGovernance({ rules: [] });
+ * const { id: agentId } = await gov.register({
+ *   name: 'research', framework: 'openai', owner: 'team',
+ * });
+ *
+ * const agent = new Agent({
+ *   name: 'research',
+ *   instructions: '...',
+ *   inputGuardrails: [createInputGuardrail(gov, { agentId })],
+ *   outputGuardrails: [createOutputGuardrail(gov, { agentId })],
+ * });
+ * ```
+ */
+
+import type { GovernanceInstance } from "@governance-sdk/core";
+import type { EnforcementDecision } from "@governance-sdk/core/policy.js";
+import type { OutcomeCallbacks } from "./outcome-handler.js";
+import {
+  GovernanceBlockedError,
+  GovernanceApprovalRequiredError,
+} from "./outcome-handler.js";
+import { enforcePreprocess, enforcePostprocess } from "./pre-post-enforce.js";
+import { contentToText as flattenContent, extractLastText } from "./text-extract.js";
+
+// ─── Types ──────────────────────────────────────────────────────
+
+/** Shape of an OpenAI Agents SDK input guardrail. */
+export interface OpenAIInputGuardrail {
+  name: string;
+  execute: (args: {
+    input: unknown;
+    context?: unknown;
+  }) => Promise<{
+    outputInfo: unknown;
+    tripwireTriggered: boolean;
+  }>;
+}
+
+/** Shape of an OpenAI Agents SDK output guardrail. */
+export interface OpenAIOutputGuardrail {
+  name: string;
+  execute: (args: {
+    agentOutput: unknown;
+    context?: unknown;
+  }) => Promise<{
+    outputInfo: unknown;
+    tripwireTriggered: boolean;
+  }>;
+}
+
+export interface OpenAIGuardrailConfig extends OutcomeCallbacks {
+  /**
+   * Bring-your-own agent id. This wrapper never calls `gov.register()`;
+   * pass the `id` returned by your own registration (or a tool adapter's
+   * `agentId`) so enforcement and audit bind to that agent row.
+   */
+  agentId: string;
+  agentName?: string;
+  /**
+   * Governance level for `agent_level` rules such as `requireLevel()`. Pass
+   * the `level` returned by `gov.register()`; when omitted the engine
+   * treats the agent as level 0 and `requireLevel(1+)` blocks every call.
+   */
+  agentLevel?: number;
+  /** Name used in the guardrail record (default: governance.input / .output). */
+  name?: string;
+  metadata?: Record<string, unknown>;
+  sessionTokenTracker?: () => number;
+}
+
+export interface GuardrailOutputInfo {
+  stage: "preprocess" | "postprocess";
+  decision: EnforcementDecision;
+  /** Original text that was scanned. */
+  text: string;
+  /** Masked text, if outcome was "mask". */
+  maskedText?: string;
+}
+
+// ─── Input Guardrail ────────────────────────────────────────────
+
+export function createInputGuardrail(
+  governance: GovernanceInstance,
+  config: OpenAIGuardrailConfig,
+): OpenAIInputGuardrail {
+  const callbacks: OutcomeCallbacks = config;
+
+  return {
+    name: config.name ?? "governance.input",
+    execute: async ({ input }) => {
+      const text = inputToText(input);
+      if (!text) {
+        return { outputInfo: null, tripwireTriggered: false };
+      }
+
+      try {
+        const result = await enforcePreprocess(governance, text, {
+          agentId: config.agentId,
+          agentName: config.agentName,
+          agentLevel: config.agentLevel,
+          metadata: config.metadata,
+          sessionTokensUsed: config.sessionTokenTracker?.(),
+          callbacks,
+          toolName: "openai-agents.inputGuardrail",
+        });
+
+        const info: GuardrailOutputInfo = {
+          stage: "preprocess",
+          decision: result.decision,
+          text,
+        };
+        // Mask does not throw — surface via tripwire with maskedText so the
+        // caller can substitute before re-running.
+        if (result.decision.outcome === "mask") {
+          info.maskedText = result.text;
+          return { outputInfo: info, tripwireTriggered: true };
+        }
+        return { outputInfo: info, tripwireTriggered: false };
+      } catch (err) {
+        if (
+          err instanceof GovernanceBlockedError ||
+          err instanceof GovernanceApprovalRequiredError
+        ) {
+          return {
+            outputInfo: {
+              stage: "preprocess",
+              decision: err.decision,
+              text,
+            } satisfies GuardrailOutputInfo,
+            tripwireTriggered: true,
+          };
+        }
+        throw err;
+      }
+    },
+  };
+}
+
+// ─── Output Guardrail ───────────────────────────────────────────
+
+export function createOutputGuardrail(
+  governance: GovernanceInstance,
+  config: OpenAIGuardrailConfig,
+): OpenAIOutputGuardrail {
+  const callbacks: OutcomeCallbacks = config;
+
+  return {
+    name: config.name ?? "governance.output",
+    execute: async ({ agentOutput }) => {
+      const text = outputToText(agentOutput);
+      if (!text) {
+        return { outputInfo: null, tripwireTriggered: false };
+      }
+
+      try {
+        const result = await enforcePostprocess(governance, text, {
+          agentId: config.agentId,
+          agentName: config.agentName,
+          agentLevel: config.agentLevel,
+          metadata: config.metadata,
+          sessionTokensUsed: config.sessionTokenTracker?.(),
+          callbacks,
+          toolName: "openai-agents.outputGuardrail",
+        });
+
+        const info: GuardrailOutputInfo = {
+          stage: "postprocess",
+          decision: result.decision,
+          text,
+        };
+        if (result.decision.outcome === "mask") {
+          info.maskedText = result.text;
+          return { outputInfo: info, tripwireTriggered: true };
+        }
+        return { outputInfo: info, tripwireTriggered: false };
+      } catch (err) {
+        if (
+          err instanceof GovernanceBlockedError ||
+          err instanceof GovernanceApprovalRequiredError
+        ) {
+          return {
+            outputInfo: {
+              stage: "postprocess",
+              decision: err.decision,
+              text,
+            } satisfies GuardrailOutputInfo,
+            tripwireTriggered: true,
+          };
+        }
+        throw err;
+      }
+    },
+  };
+}
+
+// ─── Helpers ────────────────────────────────────────────────────
+// Content flattening lives in text-extract.ts; the Agents SDK's own
+// `input_text` / `output_text` part types are normalised onto the shared
+// `type: "text"` shape first.
+
+function normalisePart(part: unknown): unknown {
+  if (!part || typeof part !== "object") return part;
+  const p = part as { type?: unknown };
+  return p.type === "input_text" || p.type === "output_text"
+    ? { ...(part as object), type: "text" }
+    : part;
+}
+
+function contentToText(content: unknown): string {
+  return flattenContent(Array.isArray(content) ? content.map(normalisePart) : content);
+}
+
+function inputToText(input: unknown): string {
+  if (typeof input === "string") return input;
+  if (!Array.isArray(input)) return "";
+  // Array of input items (Agents SDK message-style input).
+  const messages = input
+    .filter((item): item is { role?: string; content?: unknown } =>
+      Boolean(item) && typeof item === "object")
+    .map((item) => ({
+      role: item.role ?? "",
+      content: Array.isArray(item.content) ? item.content.map(normalisePart) : item.content,
+    }));
+  return extractLastText(messages);
+}
+
+function outputToText(output: unknown): string {
+  if (typeof output === "string") return output;
+  if (output && typeof output === "object") {
+    const obj = output as { content?: unknown; text?: unknown };
+    if (typeof obj.text === "string") return obj.text;
+    return contentToText(obj.content);
+  }
+  return "";
+}

@@ -203,7 +203,7 @@ What is already true on the branch:
 | Step | State | Evidence |
 |---|---|---|
 | 1. `gov.use()` and `KernelHandle` | done | `src/plugin.ts`, `src/plugin.test.ts`, `src/ext/**` (standards, scoring, detection ported onto it) |
-| 2. Adapter kernel, adapters ported | done, and wider than planned | `src/plugins/adapter-core.ts`, `text-extract.ts`; all ten adapters and nine wrappers ported, 851 lines deleted |
+| 2. Adapter kernel, adapters ported | done, wider than planned | `src/plugins/adapter-core.ts`, `text-extract.ts`; all ten adapters and nine wrappers ported, 851 lines deleted |
 | 3. `index.ts` split | done | `audit-chain.ts`, `scoring-hooks.ts`, `fail-modes.ts`; index.ts 1,141 → 869 |
 | 4. Layering lint | done | `scripts/check-layering.mjs`, wired into `npm run lint` |
 | 5. Stricter tsconfig | in progress | `noUnusedLocals` on; `noUncheckedIndexedAccess` 163 → 53 and falling |
@@ -249,6 +249,38 @@ Exit criteria: all tests green, `governance-sdk` public API unchanged,
 kernel files under 4k lines, no adapter over 250 lines among the four ported.
 
 ### Phase B — packages · 2 weeks
+
+**Status: done.** The packages exist, every test passes, and the layering rule
+is now a build constraint rather than a lint over paths.
+
+| Package | Depends on | Source files | Tests |
+|---|---|---|---|
+| `@governance-sdk/core` (private) | nothing | 34 | 345 |
+| `@governance-sdk/plugins` (private) | core | 48 | 867 |
+| `@governance-sdk/adapters` (private) | core, plugins | 45 | 435 |
+| `governance-sdk` (publishable) | all three | 5 + 51 compatibility shims | 303 |
+
+Four things the move taught, beyond what the plan anticipated:
+
+- **The lint changed job and got stronger.** It no longer compares paths; it
+  compares what a package *imports* against what it *declares*. That catches
+  two things `tsc` cannot: a dependency that only resolves because npm hoisted
+  it, and a test reaching across a boundary its package does not declare —
+  and tests are exactly where a boundary quietly rots, because they are
+  excluded from the build graph.
+- **Tests belong with the code they exercise, not the file they are named
+  after.** Eleven tests named for kernel modules were really testing the
+  detector or the standards mappings, and the package boundary is what forced
+  that admission. A test of the assembled system legitimately imports the
+  meta-package, as a devDependency — the lint permits exactly that and nothing
+  else.
+- **The scanner has to ignore comments and template literals.** The first run
+  reported fifty violations that were `import` lines inside JSDoc examples and
+  inside the scaffold the CLI writes into a user's project.
+- **`@governance-sdk/*` is a placeholder scope, and every package under it is
+  `private: true`.** Nothing new is publishable; `governance-sdk` remains the
+  only publishable unit, and renaming the scope later is one find-and-replace
+  because nothing ships under it.
 
 5. Create `packages/core`, `packages/adapters`, `packages/plugins`; move files;
    turn `packages/governance` into the meta-package with re-exports and
@@ -302,7 +334,9 @@ re-exports pass the existing test suite unchanged.
   4,341 lines across 17 files.** The overshoot is the eight recorded layering
   exceptions — the detector, the mask corpus and the scorer are still reachable
   from core. Moving them in Phase B is what brings the number down; shaving
-  lines any other way would be gaming the measure.
+  lines any other way would be gaming the measure. **Resolved: the kernel is
+  now `@governance-sdk/core`, which depends on nothing and contains 34 source
+  files. Every exception is gone, not deferred.**
 - Every adapter passes the parity test; maintained-tier adapters under 200
   lines each.
 - `governance-sdk` meta-package: today's full test suite passes against the

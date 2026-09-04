@@ -10,7 +10,7 @@ import {
   requireLevel,
   requireSequence,
   timeWindow,
-} from "./policy-presets";
+} from "@governance-sdk/core/policy-presets.js";
 import { createPolicyEngine } from "./policy-entry.js";
 import type { EnforcementContext } from "./policy-entry.js";
 

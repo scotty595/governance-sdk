@@ -10,10 +10,10 @@
  * Import `./policy.js` directly for a bare kernel engine.
  */
 
-import { createPolicyEngine as createKernelPolicyEngine, type PolicyEngine, type PolicyEngineConfig } from "./policy.js";
-import { defaultExtensions } from "./ext/defaults.js";
+import { createPolicyEngine as createKernelPolicyEngine, type PolicyEngine, type PolicyEngineConfig } from "@governance-sdk/core/policy.js";
+import { defaultExtensions } from "@governance-sdk/plugins/ext/defaults.js";
 
-export * from "./policy.js";
+export * from "@governance-sdk/core/policy.js";
 
 /**
  * Create a policy engine with the SDK's full built-in condition vocabulary.

@@ -8,7 +8,7 @@ import {
   requireLevel,
   createPolicyEngine,
   assessAgent,
-} from "./index";
+} from "./index.js";
 
 describe("createGovernance", () => {
   test("register scores agent and returns assessment", async () => {

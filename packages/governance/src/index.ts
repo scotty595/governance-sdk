@@ -29,9 +29,9 @@
  * @packageDocumentation
  */
 
-import { createGovernanceKernel } from "./governance.js";
-import type { GovernanceConfig, GovernanceInstance } from "./governance.js";
-import { defaultExtensions } from "./ext/defaults.js";
+import { createGovernanceKernel } from "@governance-sdk/core/governance.js";
+import type { GovernanceConfig, GovernanceInstance } from "@governance-sdk/core/governance.js";
+import { defaultExtensions } from "@governance-sdk/plugins/ext/defaults.js";
 
 /**
  * Create a governance instance.
@@ -52,7 +52,7 @@ export function createGovernance(config: GovernanceConfig = {}): GovernanceInsta
   return createGovernanceKernel({ ...config, extensions: config.extensions ?? defaultExtensions() });
 }
 
-export { createGovernanceKernel, storedToRegistration, CORE_VERSION } from "./governance.js";
+export { createGovernanceKernel, storedToRegistration, CORE_VERSION } from "@governance-sdk/core/governance.js";
 export type {
   GovernanceConfig,
   GovernanceInstance,
@@ -61,26 +61,26 @@ export type {
   KernelExtensions,
   KernelScoring,
   KernelScoringDeps,
-} from "./governance.js";
-export { NoScorerError, unscoredAssessment, NO_SCORER_LEVEL } from "./governance.js";
-export { defaultExtensions } from "./ext/defaults.js";
+} from "@governance-sdk/core/governance.js";
+export { NoScorerError, unscoredAssessment, NO_SCORER_LEVEL } from "@governance-sdk/core/governance.js";
+export { defaultExtensions } from "@governance-sdk/plugins/ext/defaults.js";
 export { createPolicyEngine } from "./policy-entry.js";
 
 // Storage types and the memory adapter — other modules import these from the
 // barrel, so it stays the one place they resolve from.
-export type { GovernanceStorage, StoredAgent, AuditEvent, AuditOutcome, AuditQueryFilters } from "./storage.js";
-export { createMemoryStorage } from "./storage.js";
+export type { GovernanceStorage, StoredAgent, AuditEvent, AuditOutcome, AuditQueryFilters } from "@governance-sdk/core/storage.js";
+export { createMemoryStorage } from "@governance-sdk/core/storage.js";
 
 // ─── Re-exports ─────────────────────────────────────────────────
 
-export { assessAgent, assessFleet, getGovernanceLevel } from "./scorer.js";
-export { blockTools, allowOnlyTools, requireApproval, requireToolApproval, requireTierApproval, blockTaintedTools, toolResultInjectionGuard, tokenBudget, rateLimit, requireLevel, requireSignedIdentity, requireSequence, timeWindow, MAX_USER_PRIORITY, SYSTEM_RULE_PRIORITY, PolicyValidationError, validateRuleShape, POLICY_OUTCOMES, POLICY_STAGES, markTaint, hasTaint, appendTaint } from "./policy.js";
-export type { PolicyRule, PolicyEngine, PolicyAction, PolicyCondition, PolicyOutcome, PolicyStage, ActionTier, EnforcementContext, EnforcementDecision, PolicyEngineConfig, ConditionEvaluator, RegisteredConditionType, PolicyValidationIssue, TaintMark, TaintSource, TaintFilter } from "./policy.js";
-export { createAuditChain, resolveOrgId } from "./audit-chain.js";
-export type { AuditChain, AuditChainDeps, ResolvedIntegrityConfig } from "./audit-chain.js";
-export { createScoringHooks, scoringExtension } from "./ext/scoring-hooks.js";
-export type { ScoringHooks } from "./ext/scoring-hooks.js";
-export { createSessionLedger } from "./session-ledger.js";
+export { assessAgent, assessFleet, getGovernanceLevel } from "@governance-sdk/plugins/scorer.js";
+export { blockTools, allowOnlyTools, requireApproval, requireToolApproval, requireTierApproval, blockTaintedTools, toolResultInjectionGuard, tokenBudget, rateLimit, requireLevel, requireSignedIdentity, requireSequence, timeWindow, MAX_USER_PRIORITY, SYSTEM_RULE_PRIORITY, PolicyValidationError, validateRuleShape, POLICY_OUTCOMES, POLICY_STAGES, markTaint, hasTaint, appendTaint } from "@governance-sdk/core/policy.js";
+export type { PolicyRule, PolicyEngine, PolicyAction, PolicyCondition, PolicyOutcome, PolicyStage, ActionTier, EnforcementContext, EnforcementDecision, PolicyEngineConfig, ConditionEvaluator, RegisteredConditionType, PolicyValidationIssue, TaintMark, TaintSource, TaintFilter } from "@governance-sdk/core/policy.js";
+export { createAuditChain, resolveOrgId } from "@governance-sdk/core/audit-chain.js";
+export type { AuditChain, AuditChainDeps, ResolvedIntegrityConfig } from "@governance-sdk/core/audit-chain.js";
+export { createScoringHooks, scoringExtension } from "@governance-sdk/plugins/ext/scoring-hooks.js";
+export type { ScoringHooks } from "@governance-sdk/plugins/ext/scoring-hooks.js";
+export { createSessionLedger } from "@governance-sdk/core/session-ledger.js";
 
 // ─── Plugins (ext) ──────────────────────────────────────────────
 // Standards, scoring and detection reached through gov.use(). Additive: the
@@ -91,17 +91,17 @@ export {
   nistAiRmfPlugin,
   iso42001Plugin,
   allStandardsPlugins,
-} from "./ext/standards-plugin.js";
-export { scoringPlugin } from "./ext/scoring-plugin.js";
+} from "@governance-sdk/plugins/ext/standards-plugin.js";
+export { scoringPlugin } from "@governance-sdk/plugins/ext/scoring-plugin.js";
 export type {
   AgentScoreConfig,
   FleetScoreConfig,
   BehavioralScoreConfig,
   ScoringPluginOptions,
-} from "./ext/scoring-plugin.js";
-export { detectPlugin } from "./ext/detect-plugin.js";
-export type { DetectPluginOptions, BenchmarkReportConfig } from "./ext/detect-plugin.js";
-export { createPluginRegistry, satisfiesRange, PluginError } from "./plugin.js";
+} from "@governance-sdk/plugins/ext/scoring-plugin.js";
+export { detectPlugin } from "@governance-sdk/plugins/ext/detect-plugin.js";
+export type { DetectPluginOptions, BenchmarkReportConfig } from "@governance-sdk/plugins/ext/detect-plugin.js";
+export { createPluginRegistry, satisfiesRange, PluginError } from "@governance-sdk/core/plugin.js";
 export type {
   GovernancePlugin,
   KernelHandle,
@@ -113,41 +113,41 @@ export type {
   Reporter,
   VerifierKind,
   PluginRegistry,
-} from "./plugin.js";
-export type { SessionLedger, SessionLedgerConfig, SessionSnapshot } from "./session-ledger.js";
-export type { AgentRegistration, AgentFramework, AgentStatus, GovernanceAssessment, GovernanceLevel, DimensionResult, ScoreDimension, FleetSummary } from "./types.js";
-export { detectInjection, createInjectionGuard, getBuiltinPatterns } from "./injection-detect.js";
-export type { InjectionPattern, InjectionCategory, InjectionResult, InjectionDetectorConfig } from "./injection-detect.js";
-export { createGovernanceEmitter } from "./events.js";
-export { dryRun, fleetDryRun } from "./dry-run.js";
-export type { DryRunScenario, DryRunAction, DryRunResult, DryRunDecision, DryRunSummary, DryRunConfig, FleetDryRunResult } from "./dry-run.js";
-export { createGovernanceMetrics } from "./metrics.js";
-export type { GovernanceMetrics, MetricName, TimingName, MetricLabels, MetricsSnapshot } from "./metrics.js";
-export type { GovernanceEmitter, GovernanceEvent, GovernanceEventType, GovernanceEventHandler } from "./events.js";
-export { computeSignals, computeBehavioralAdjustments, applyBehavioralAdjustments } from "./behavioral-scorer.js";
-export type { BehavioralInput, BehavioralAdjustment, BehavioralAssessment, BehavioralSignals } from "./behavioral-scorer.js";
-export { scanRepoContents, scanRepoContentsWithPlugins, SCAN_GLOBS, SCAN_IGNORE } from "./repo-patterns.js";
-export type { CapabilityDetection, RepoScanResult, ScanWithPluginsOptions } from "./repo-patterns.js";
+} from "@governance-sdk/core/plugin.js";
+export type { SessionLedger, SessionLedgerConfig, SessionSnapshot } from "@governance-sdk/core/session-ledger.js";
+export type { AgentRegistration, AgentFramework, AgentStatus, GovernanceAssessment, GovernanceLevel, DimensionResult, ScoreDimension, FleetSummary } from "@governance-sdk/core/types.js";
+export { detectInjection, createInjectionGuard, getBuiltinPatterns } from "@governance-sdk/plugins/injection-detect.js";
+export type { InjectionPattern, InjectionCategory, InjectionResult, InjectionDetectorConfig } from "@governance-sdk/plugins/injection-detect.js";
+export { createGovernanceEmitter } from "@governance-sdk/core/events.js";
+export { dryRun, fleetDryRun } from "@governance-sdk/plugins/dry-run.js";
+export type { DryRunScenario, DryRunAction, DryRunResult, DryRunDecision, DryRunSummary, DryRunConfig, FleetDryRunResult } from "@governance-sdk/plugins/dry-run.js";
+export { createGovernanceMetrics } from "@governance-sdk/core/metrics.js";
+export type { GovernanceMetrics, MetricName, TimingName, MetricLabels, MetricsSnapshot } from "@governance-sdk/core/metrics.js";
+export type { GovernanceEmitter, GovernanceEvent, GovernanceEventType, GovernanceEventHandler } from "@governance-sdk/core/events.js";
+export { computeSignals, computeBehavioralAdjustments, applyBehavioralAdjustments } from "@governance-sdk/plugins/behavioral-scorer.js";
+export type { BehavioralInput, BehavioralAdjustment, BehavioralAssessment, BehavioralSignals } from "@governance-sdk/plugins/behavioral-scorer.js";
+export { scanRepoContents, scanRepoContentsWithPlugins, SCAN_GLOBS, SCAN_IGNORE } from "@governance-sdk/plugins/repo-patterns.js";
+export type { CapabilityDetection, RepoScanResult, ScanWithPluginsOptions } from "@governance-sdk/plugins/repo-patterns.js";
 export type {
   ScannerPlugin,
   ScannerImport,
   FileResolver,
   ResolvedSource,
   ExpandToolsContext,
-} from "./scanner-plugins/types.js";
-export { findPackageJsonPaths, detectAgentRoots } from "./monorepo-detect.js";
-export type { AgentRoot } from "./monorepo-detect.js";
-export { RemoteEnforcementError, RemoteContractError, isEnforcementDecision } from "./remote-enforce.js";
-export type { FallbackMode, RemoteStatus, RemoteConfig, RemoteFallbackInfo } from "./remote-enforce.js";
-export { composePolicies, securityBaseline, complianceOverlay, platformDefaults } from "./policy-compose.js";
-export type { PolicySet, ConflictStrategy, ComposeConfig, ComposeResult, PolicyConflict } from "./policy-compose.js";
-export { getDefaultStage } from "./policy-stage-defaults.js";
-export { inputBlocklist, inputLength, inputPattern, networkAllowlist, scopeBoundary, costBudget, concurrentLimit, outputLength, outputPattern, sensitiveDataFilter, maskSensitiveOutput, maskOutputPattern } from "./policy-presets-extended.js";
-export { mlInjectionGuard } from "./policy-presets.js";
-export { runWithOutcome } from "./action-recorder.js";
-export type { RunWithOutcomeOptions } from "./action-recorder.js";
-export { scanToolResult, extractScannableText } from "./plugins/tool-result-scan.js";
-export type { ScanToolResultInput, ScanToolResultOutput, BlockedToolResult } from "./plugins/tool-result-scan.js";
-export { SENSITIVE_PATTERNS, getSensitivePatterns } from "./conditions/sensitive-patterns.js";
-export type { SensitivePattern } from "./conditions/sensitive-patterns.js";
-export { maskSensitiveData, maskPattern, maskBlocklistTerms } from "./mask.js";
+} from "@governance-sdk/plugins/scanner-plugins/types.js";
+export { findPackageJsonPaths, detectAgentRoots } from "@governance-sdk/plugins/monorepo-detect.js";
+export type { AgentRoot } from "@governance-sdk/plugins/monorepo-detect.js";
+export { RemoteEnforcementError, RemoteContractError, isEnforcementDecision } from "@governance-sdk/core/remote-enforce.js";
+export type { FallbackMode, RemoteStatus, RemoteConfig, RemoteFallbackInfo } from "@governance-sdk/core/remote-enforce.js";
+export { composePolicies, securityBaseline, complianceOverlay, platformDefaults } from "@governance-sdk/plugins/policy-compose.js";
+export type { PolicySet, ConflictStrategy, ComposeConfig, ComposeResult, PolicyConflict } from "@governance-sdk/plugins/policy-compose.js";
+export { getDefaultStage } from "@governance-sdk/core/policy-stage-defaults.js";
+export { inputBlocklist, inputLength, inputPattern, networkAllowlist, scopeBoundary, costBudget, concurrentLimit, outputLength, outputPattern, sensitiveDataFilter, maskSensitiveOutput, maskOutputPattern } from "@governance-sdk/core/policy-presets-extended.js";
+export { mlInjectionGuard } from "@governance-sdk/core/policy-presets.js";
+export { runWithOutcome } from "@governance-sdk/core/action-recorder.js";
+export type { RunWithOutcomeOptions } from "@governance-sdk/core/action-recorder.js";
+export { scanToolResult, extractScannableText } from "@governance-sdk/adapters/plugins/tool-result-scan.js";
+export type { ScanToolResultInput, ScanToolResultOutput, BlockedToolResult } from "@governance-sdk/adapters/plugins/tool-result-scan.js";
+export { SENSITIVE_PATTERNS, getSensitivePatterns } from "@governance-sdk/plugins/conditions/sensitive-patterns.js";
+export type { SensitivePattern } from "@governance-sdk/plugins/conditions/sensitive-patterns.js";
+export { maskSensitiveData, maskPattern, maskBlocklistTerms } from "@governance-sdk/plugins/mask.js";

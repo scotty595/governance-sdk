@@ -14,11 +14,11 @@
  */
 
 import { createGovernance } from "../index.js";
-import { blockTools, requireToolApproval, type EnforcementDecision } from "../policy.js";
-import { createInjectionGuard } from "../injection-detect.js";
-import { maskSensitiveOutput } from "../policy-presets-extended.js";
-import { verifyAuditIntegrity } from "../audit-integrity-verify.js";
-import type { ChainVerificationResult, IntegrityAuditEvent } from "../audit-integrity.js";
+import { blockTools, requireToolApproval, type EnforcementDecision } from "@governance-sdk/core/policy.js";
+import { createInjectionGuard } from "@governance-sdk/plugins/injection-detect.js";
+import { maskSensitiveOutput } from "@governance-sdk/core/policy-presets-extended.js";
+import { verifyAuditIntegrity } from "@governance-sdk/core/audit-integrity-verify.js";
+import type { ChainVerificationResult, IntegrityAuditEvent } from "@governance-sdk/core/audit-integrity.js";
 
 const AGENT_NAME = "support-bot";
 const SIGNING_KEY = "demo-signing-key-rotate-me";

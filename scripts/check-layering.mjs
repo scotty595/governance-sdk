@@ -2,207 +2,144 @@
 /**
  * Layering lint — the single rule that stops the kernel re-growing.
  *
- * The restructure (docs/restructure-plan.md) splits the SDK into three layers.
- * Today they are directories inside one package; in Phase B they become
- * separate packages. The rule is the same either way, so it is enforced now,
- * against paths, and the package split will not need a new one:
+ * Before the package split this compared paths. Now the layers are real
+ * packages, so it compares what a package IMPORTS against what it DECLARES:
  *
- *   core      — the policy engine, audit chain, storage contract, event bus.
- *               May import only core.
- *   adapters  — src/plugins/** (one per framework) and src/conformance/**
- *               (the Agent Hooks contract). May import core.
- *   ext       — src/ext/**, detection / standards / scoring / sinks.
- *               May import core. Never an adapter.
+ *   @governance-sdk/core      the kernel. Declares no dependencies, and must
+ *                             import none. This is the whole point.
+ *   @governance-sdk/plugins   detection, standards, scoring, identity, sinks,
+ *                             policy authoring. May import core.
+ *   @governance-sdk/adapters  framework adapters, the adapter kernel, the
+ *                             Agent Hooks conformance surface. May import core
+ *                             and plugins.
+ *   governance-sdk            the meta-package: re-exports every layer under
+ *                             one name and wires the default extension set.
  *
- * A violation is a file importing across a boundary the rule forbids. Known
- * violations are listed in EXCEPTIONS with the reason and the phase that
- * removes them: the lint fails on anything new, and on an exception that has
- * been fixed and should therefore be deleted from the list.
+ * Two things this catches that `tsc` alone does not: an undeclared dependency
+ * that only works because npm hoisted it, and a *test* reaching across a
+ * boundary its package does not declare — tests are excluded from the build
+ * graph, so they are exactly where a boundary quietly rots.
  *
  * Usage: node scripts/check-layering.mjs [--list]
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import { join, relative, dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), "..");
-const SRC = join(ROOT, "packages/governance/src");
+const PACKAGES = ["core", "plugins", "adapters", "governance"];
 
-const ADAPTER_DIRS = ["plugins/", "conformance/"];
-const EXT_DIR = "ext/";
-/**
- * The CLI is an application on top of the SDK, not part of it — it consumes
- * every layer the way a user's own code does, so it sits above the rule.
- */
-const APP_DIR = "cli/";
-
-/**
- * Files that are logically `ext` but still sit in the core directory, because
- * moving them is Phase B (packages) and moving them early would change import
- * paths the public API depends on. Listing them here means the layering rule
- * is enforced against the ARCHITECTURE now, not against the directory tree
- * later — so core-to-detection coupling is visible today instead of being
- * discovered during the package split.
- *
- * A file leaves this list when it moves under src/ext/. The list only shrinks.
- */
-const LOGICAL_EXT = new Set([
-  // detection
-  "injection-detect.ts",
-  "injection-patterns.ts",
-  "injection-patterns-ext.ts",
-  "injection-classifier.ts",
-  "injection-benchmark.ts",
-  "conditions/sensitive-patterns.ts",
-  "mask.ts",
-  "scan/multi-modal.ts",
-  // standards
-  "compliance.ts",
-  "compliance-articles.ts",
-  "compliance-assessors.ts",
-  "compliance-schedule.ts",
-  "compliance-types.ts",
-  "owasp-agentic.ts",
-  "owasp-agentic-articles.ts",
-  "owasp-agentic-assessors.ts",
-  "owasp-agentic-types.ts",
-  "nist-ai-rmf.ts",
-  "nist-ai-rmf-articles.ts",
-  "iso-42001.ts",
-  "iso-42001-articles.ts",
-  // scoring
-  "scorer.ts",
-  "scorer-dimensions.ts",
-  "behavioral-scorer.ts",
-  "repo-patterns.ts",
-  // identity, supply chain, sinks
-  "agent-identity.ts",
-  "agent-identity-ed25519.ts",
-  "agent-identity-ed25519-token.ts",
-  "agent-identity-replay-store.ts",
-  "supply-chain.ts",
-  "supply-chain-cyclonedx.ts",
-  "storage-postgres.ts",
-  "storage-postgres-schema.ts",
-  "otel-hooks.ts",
-  // repository scanning — only repo-patterns and the barrel reach these
-  "import-lexer.ts",
-  "monorepo-detect.ts",
-  "scanner-plugins/types.ts",
-  "token-types.ts",
-  // policy authoring surfaces
-  "policy-yaml.ts",
-  "policy-builder.ts",
-  "policy-compose.ts",
-  "policy-compose-presets.ts",
-  "dry-run.ts",
-]);
+/** What each package is permitted to depend on, by design. */
+const ALLOWED = {
+  "@governance-sdk/core": new Set([]),
+  "@governance-sdk/plugins": new Set(["@governance-sdk/core"]),
+  "@governance-sdk/adapters": new Set(["@governance-sdk/core", "@governance-sdk/plugins"]),
+  "governance-sdk": new Set([
+    "@governance-sdk/core",
+    "@governance-sdk/plugins",
+    "@governance-sdk/adapters",
+  ]),
+};
 
 /**
- * Known, accepted violations: `"<from> -> <to>"`, with why and when it goes.
- * Keep this list shrinking. An entry that no longer matches a real import is
- * reported as stale, so a fix cannot leave dead scaffolding behind.
+ * Packages a test file may reach for beyond its package's runtime deps. A test
+ * of the kernel that needs the assembled system is legitimate — it is testing
+ * what a user gets — as long as it is a devDependency and never a runtime one.
  */
-const EXCEPTIONS = new Map([]);
+const TEST_ONLY_ALLOWED = new Set(["governance-sdk"]);
 
 function walk(dir, out = []) {
+  if (!existsSync(dir)) return out;
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) walk(full, out);
-    else if (entry.endsWith(".ts") && !entry.endsWith(".test.ts")) out.push(full);
+    else if (entry.endsWith(".ts")) out.push(full);
   }
   return out;
 }
 
-function layerOf(rel) {
-  if (META.has(rel)) return "meta";
-  if (rel.startsWith(APP_DIR)) return "app";
-  if (ADAPTER_DIRS.some((d) => rel.startsWith(d))) return "adapters";
-  if (rel.startsWith(EXT_DIR)) return "ext";
-  if (LOGICAL_EXT.has(rel)) return "ext";
-  return "core";
+const SPEC_RE = /(?:import|export)\s[^;]*?from\s+["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)/g;
+
+/**
+ * Strip comments and template literals before scanning.
+ *
+ * Without this the lint reads the `import` lines inside JSDoc examples, and
+ * the scaffold the CLI writes into a user's project, as if they were real
+ * imports — which is how a doc comment ends up "violating" a layer.
+ */
+function stripNonCode(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/[^\n]*/g, "$1")
+    .replace(/`(?:\\.|[^`\\])*`/g, "``");
 }
-
-/** What each layer is allowed to IMPORT (re-exports are handled separately). */
-const ALLOWED = {
-  core: new Set(["core"]),
-  adapters: new Set(["core", "adapters"]),
-  ext: new Set(["core", "ext"]),
-  app: new Set(["core", "adapters", "ext", "app", "meta"]),
-  meta: new Set(["core", "adapters", "ext", "meta"]),
-};
-
-/**
- * Public barrels. A barrel's job is to re-export the whole surface under one
- * name — that is precisely what the `governance-sdk` meta-package becomes in
- * Phase B — so `export ... from` across a boundary is allowed here. A real
- * `import` in a barrel is still checked: re-exporting ext is the design,
- * depending on it is not.
- */
-const BARRELS = new Set(["index.ts", "policy-entry.ts"]);
-
-/**
- * The meta-package. It re-exports every layer under one name AND is the only
- * place that wires the default extension set onto the kernel, so it is the
- * one file allowed to import ext. In Phase B these become the
- * `governance-sdk` package and the others become its dependencies.
- */
-const META = new Set(["index.ts", "policy-entry.ts"]);
-
-/**
- * The one narrow cross-layer import the design allows: an adapter that
- * intercepts tool returns needs the detector to generate the signal it then
- * enforces on. Phase B injects this through the plugin contract instead.
- */
-const ADAPTER_DETECTION_ALLOWANCE = new Set(["injection-detect.ts", "tool-result-scan.ts"]);
-
-const IMPORT_RE = /(?:^|\n)\s*(import)\s[^;]*?from\s+["']([^"']+)["']/g;
-const REEXPORT_RE = /(?:^|\n)\s*(export)\s[^;]*?from\s+["']([^"']+)["']/g;
 
 const violations = [];
-const seen = new Set();
+const summary = [];
 
-for (const file of walk(SRC)) {
-  const rel = relative(SRC, file);
-  const from = layerOf(rel);
-  const source = readFileSync(file, "utf8");
-  const patterns = BARRELS.has(rel) ? [IMPORT_RE] : [IMPORT_RE, REEXPORT_RE];
-  for (const re of patterns) {
-    for (const m of source.matchAll(re)) {
-      const spec = m[2];
-      if (!spec.startsWith(".")) continue; // external / peer dependency
-      const target = relative(SRC, resolvePath(dirname(file), spec)).replace(/\.js$/, ".ts");
-      const to = layerOf(target);
-      if (ALLOWED[from].has(to)) continue;
-      if (from === "adapters" && ADAPTER_DETECTION_ALLOWANCE.has(target)) continue;
-      const key = `${rel} -> ${target}`;
-      seen.add(key);
-      if (EXCEPTIONS.has(key)) continue;
-      violations.push({ key, from, to });
+for (const pkg of PACKAGES) {
+  const dir = join(ROOT, "packages", pkg);
+  const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+  const name = manifest.name;
+  const declared = new Set(Object.keys(manifest.dependencies ?? {}));
+  const declaredDev = new Set(Object.keys(manifest.devDependencies ?? {}));
+  const allowed = ALLOWED[name];
+  if (!allowed) continue;
+
+  // 1. Declared dependencies must be permitted by the design.
+  for (const dep of declared) {
+    if (!dep.startsWith("@governance-sdk/") && dep !== "governance-sdk") continue;
+    if (!allowed.has(dep)) {
+      violations.push(`${name} declares a dependency on ${dep}, which its layer forbids`);
     }
   }
-}
 
-const stale = [...EXCEPTIONS.keys()].filter((k) => !seen.has(k));
+  const used = new Set();
+  for (const file of walk(join(dir, "src"))) {
+    const rel = relative(dir, file);
+    const isTest = file.endsWith(".test.ts");
+    const source = stripNonCode(readFileSync(file, "utf8"));
+    for (const m of source.matchAll(SPEC_RE)) {
+      const spec = m[1] ?? m[2];
+      if (!spec || spec.startsWith(".") || spec.startsWith("node:")) continue;
+      const owner = spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
+      if (owner !== "governance-sdk" && !owner.startsWith("@governance-sdk/")) continue;
+      used.add(owner);
+
+      // 2. Never import your own package by name — it hides a cycle.
+      if (owner === name) {
+        violations.push(`${name}: ${rel} imports its own package by name (${spec}); use a relative path`);
+        continue;
+      }
+      // 3. Imports must be within the layer's allowance...
+      if (!allowed.has(owner)) {
+        if (isTest && TEST_ONLY_ALLOWED.has(owner)) {
+          if (!declaredDev.has(owner)) {
+            violations.push(`${name}: ${rel} imports ${owner} but it is not a devDependency`);
+          }
+          continue;
+        }
+        violations.push(`${name}: ${rel} imports ${owner}, which its layer forbids`);
+        continue;
+      }
+      // 4. ...and declared, so nothing works only because npm hoisted it.
+      if (!declared.has(owner) && !(isTest && declaredDev.has(owner))) {
+        violations.push(`${name}: ${rel} imports ${owner} but it is not a declared dependency`);
+      }
+    }
+  }
+  summary.push(`${name.padEnd(26)} → ${[...used].sort().join(", ") || "nothing"}`);
+}
 
 if (process.argv.includes("--list")) {
-  console.log(`Layering: ${EXCEPTIONS.size} accepted exception(s), ${violations.length} violation(s).`);
-  for (const [key, why] of EXCEPTIONS) console.log(`  accepted  ${key}\n            ${why}`);
+  console.log("Package dependency graph, as imported:");
+  for (const line of summary) console.log("  " + line);
 }
 
-let failed = false;
-for (const v of violations) {
-  failed = true;
-  console.error(`::error::layering: ${v.from} must not import ${v.to} — ${v.key}`);
-}
-for (const key of stale) {
-  failed = true;
-  console.error(`::error::layering: exception "${key}" no longer matches a real import. Delete it from EXCEPTIONS in scripts/check-layering.mjs.`);
-}
-
-if (failed) {
+if (violations.length > 0) {
+  for (const v of violations) console.error(`::error::layering: ${v}`);
   console.error("\nSee docs/restructure-plan.md § Layering rule.");
   process.exit(1);
 }
-console.log(`✓ layering clean (${EXCEPTIONS.size} accepted exception(s), all still real)`);
+console.log("✓ layering clean — the kernel depends on nothing, and every import is declared");

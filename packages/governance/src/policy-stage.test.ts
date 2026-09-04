@@ -1,10 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createPolicyEngine } from "./policy.js";
-import type { PolicyRule, EnforcementContext } from "./policy.js";
+import { createPolicyEngine } from "@governance-sdk/core/policy.js";
+import type { PolicyRule, EnforcementContext } from "@governance-sdk/core/policy.js";
 import { createGovernance } from "./index.js";
-import { blockTools, requireLevel, timeWindow } from "./policy-presets.js";
-import { inputBlocklist, sensitiveDataFilter, outputLength } from "./policy-presets-extended.js";
+import { blockTools, requireLevel, timeWindow } from "@governance-sdk/core/policy-presets.js";
+import { inputBlocklist, sensitiveDataFilter, outputLength } from "@governance-sdk/core/policy-presets-extended.js";
 
 const baseCtx: EnforcementContext = {
   agentId: "test-agent",
