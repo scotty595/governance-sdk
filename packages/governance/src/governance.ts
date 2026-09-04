@@ -15,7 +15,6 @@
  * detection or standards. See docs/restructure-plan.md.
  */
 
-import { assessAgent } from "./scorer.js";
 import { createPolicyEngine } from "./policy.js";
 import { createMemoryStorage } from "./storage.js";
 import { createRemoteEnforcer, validateRemoteConfig, type RemoteConfig } from "./remote-enforce.js";
@@ -33,11 +32,10 @@ import {
   type VerifierKind,
 } from "./plugin.js";
 import { createAuditChain, resolveOrgId } from "./audit-chain.js";
-import { createScoringHooks } from "./scoring-hooks.js";
 import { computeFailModes, describeFailModes, type FailModes } from "./fail-modes.js";
 export type { FailModes };
 import type { IntegrityAuditEvent } from "./audit-integrity.js";
-import type { AgentRegistration, GovernanceAssessment, FleetSummary } from "./types.js";
+import type { AgentRegistration, GovernanceAssessment, GovernanceLevel, FleetSummary } from "./types.js";
 import type {
   PolicyRule,
   PolicyOutcome,
@@ -62,6 +60,120 @@ export interface KernelExtensions {
   conditions?: RegisteredConditionType[];
   /** Mask strategies by condition type — e.g. `sensitive_data_filter`. */
   maskStrategies?: Record<string, MaskStrategy>;
+  /**
+   * The scoring model behind `register()`'s score, `score()` and
+   * `scoreFleet()` — e.g. the SDK's 7-dimension posture scorer.
+   *
+   * A factory rather than a ready-made object: the re-scoring methods need
+   * the kernel's storage, which the kernel may have created itself when the
+   * caller passed none, so the extension cannot be built before the kernel
+   * is. It is called once, synchronously, during construction.
+   *
+   * Omitted, the kernel says so rather than inventing a number — see
+   * `unscoredAssessment()` and `NoScorerError`.
+   */
+  scoring?: (deps: KernelScoringDeps) => KernelScoring;
+}
+
+/**
+ * What the kernel hands a scoring extension at construction: its storage, and
+ * the mapping from a stored agent back to the registration shape a scorer
+ * reads. Both are kernel state, passed in rather than imported, so the
+ * extension never depends on the kernel at runtime.
+ */
+export interface KernelScoringDeps {
+  storage: GovernanceStorage;
+  storedToRegistration: (agent: StoredAgent) => AgentRegistration;
+}
+
+/**
+ * The scoring model, supplied by an extension.
+ *
+ * The kernel owns the *concept* of a level — the number carried on
+ * `EnforcementContext.agentLevel` that `requireLevel()` compares — and owns
+ * nothing about how one is earned. Dimensions, weights and bands are the
+ * extension's, and are versioned on their own clock because a score only
+ * means something next to another score from the same weights.
+ *
+ * `assess` is synchronous because `register()` returns the score it produces
+ * and therefore cannot await it. The two re-scoring methods are async because
+ * `score()` and `scoreFleet()` already are — they read storage.
+ */
+export interface KernelScoring {
+  /** Score an agent's declared posture, at registration time. */
+  assess(agentId: string, registration: AgentRegistration): GovernanceAssessment;
+  /** Re-score one stored agent, typically against its audit history. */
+  scoreAgent(agentId: string): Promise<GovernanceAssessment | null>;
+  /** Re-score every stored agent and summarise the fleet. */
+  scoreFleet(): Promise<{ assessments: GovernanceAssessment[]; summary: FleetSummary }>;
+}
+
+/**
+ * Level 0 for a kernel with no scoring extension.
+ *
+ * The kernel still has to name a level — `requireLevel()` compares one — and
+ * the only honest one it can assign without a scorer is the floor: no
+ * autonomy, because nothing has assessed the agent. The label is "Unscored"
+ * rather than the scorer's "Unregistered" so it cannot be read as a verdict
+ * the kernel never reached, and the band is 0–0 rather than 0–20 for the
+ * same reason: it is not a range, it is the absence of one.
+ */
+export const NO_SCORER_LEVEL: GovernanceLevel = {
+  level: 0,
+  label: "Unscored",
+  autonomy: "No autonomous operation — no scoring extension installed",
+  minScore: 0,
+  maxScore: 0,
+};
+
+/**
+ * The assessment `register()` returns on a kernel with no scoring extension:
+ * score 0, level 0, status `"registered"` — the one status in the union that
+ * claims nothing beyond "it exists" — and, load-bearing, **no dimensions at
+ * all**. An empty `dimensions` array is what stops this being mistaken for a
+ * scorer that ran and found zeros.
+ */
+export function unscoredAssessment(agentId: string, agentName: string): GovernanceAssessment {
+  return {
+    agentId,
+    agentName,
+    compositeScore: 0,
+    level: NO_SCORER_LEVEL,
+    dimensions: [],
+    status: "registered",
+    assessedAt: new Date().toISOString(),
+    recommendations: [
+      "No scoring extension installed: this agent was registered but not assessed. Use createGovernance(), or pass extensions.scoring, for a real score.",
+    ],
+  };
+}
+
+/** Thrown by `score()` and `scoreFleet()` when no scoring extension is installed. */
+export class NoScorerError extends Error {
+  constructor(method: "score" | "scoreFleet") {
+    super(
+      `gov.${method}() needs a scoring extension: this instance was built by createGovernanceKernel() without one. Use createGovernance(), or pass extensions.scoring (see defaultExtensions()).`,
+    );
+    this.name = "NoScorerError";
+  }
+}
+
+/**
+ * What the kernel scores with when the caller supplied nothing.
+ *
+ * `register()` still returns a shape, because its signature promises one, but
+ * a neutral one that says it was never scored. `score()` and `scoreFleet()`
+ * throw instead: neither return type has a value that means "nothing computed
+ * this" — `null` from `score()` already means "no such agent", and an empty
+ * fleet summary is indistinguishable from a fleet of zero agents — so any
+ * value they returned would be a lie the caller could not detect.
+ */
+function noScorer(): KernelScoring {
+  return {
+    assess: (agentId, registration) => unscoredAssessment(agentId, registration.name),
+    scoreAgent: () => Promise.reject(new NoScorerError("score")),
+    scoreFleet: () => Promise.reject(new NoScorerError("scoreFleet")),
+  };
 }
 
 
@@ -176,10 +288,12 @@ export interface GovernanceConfig {
   /** Called when a fire-and-forget audit write fails. Audit errors never block enforcement. */
   onAuditError?: (error: unknown) => void;
   /**
-   * Conditions and mask strategies to register at construction. The barrel's
-   * `createGovernance()` supplies the default set; pass `{}` for a bare
-   * kernel, where a mask rule with no strategy fails closed to `block` and a
-   * rule naming an unregistered condition is rejected when it is added.
+   * Conditions, mask strategies and the scoring model, registered at
+   * construction. The barrel's `createGovernance()` supplies the default set;
+   * pass `{}` for a bare kernel, where a mask rule with no strategy fails
+   * closed to `block`, a rule naming an unregistered condition is rejected
+   * when it is added, and `register()` returns an unscored level-0 assessment
+   * while `score()` / `scoreFleet()` throw `NoScorerError`.
    */
   extensions?: KernelExtensions;
   /**
@@ -220,6 +334,13 @@ export interface ReadonlyPolicyEngine {
 
 /** The main governance instance returned by createGovernance() */
 export interface GovernanceInstance {
+  /**
+   * Register an agent and score its declared posture.
+   *
+   * Without a scoring extension the score is 0 and the level is 0, with an
+   * assessment that says so (`level.label === "Unscored"`, no dimensions) —
+   * see `unscoredAssessment()`.
+   */
   register: (input: AgentRegistration) => Promise<{
     id: string; score: number; level: number; status: string;
     assessment: GovernanceAssessment;
@@ -289,7 +410,20 @@ export interface GovernanceInstance {
     query: (filters: AuditQueryFilters) => Promise<AuditEvent[]>;
     count: (filters?: AuditQueryFilters) => Promise<number>;
   };
+  /**
+   * Re-score one agent from its stored registration and audit history.
+   * `null` means no such agent.
+   *
+   * Throws `NoScorerError` on an instance built without a scoring extension
+   * (`createGovernanceKernel()` with no `extensions.scoring`) — `null` there
+   * would be indistinguishable from "no such agent".
+   */
   score: (agentId: string) => Promise<GovernanceAssessment | null>;
+  /**
+   * Re-score every stored agent and summarise the fleet. Throws
+   * `NoScorerError` without a scoring extension, for the same reason: an
+   * empty summary would read as a fleet of zero agents.
+   */
   scoreFleet: () => Promise<{ assessments: GovernanceAssessment[]; summary: FleetSummary }>;
   /** Read-only view — use addRule()/removeRule() on the instance for mutations */
   policies: ReadonlyPolicyEngine;
@@ -424,6 +558,12 @@ export function createGovernanceKernel(config: GovernanceConfig = {}): Governanc
   for (const [conditionType, mask] of Object.entries(extensions.maskStrategies ?? {})) {
     policies.registerMaskStrategy(conditionType, mask);
   }
+  // Scoring is an extension too: the kernel reports a level, it does not
+  // decide how one is earned. Built here, synchronously, because register()
+  // returns the score it produces and so cannot await one.
+  const scoring: KernelScoring = extensions.scoring
+    ? extensions.scoring({ storage, storedToRegistration })
+    : noScorer();
 
   // ── Plugin surface ───────────────────────────────────────────
   // Sinks receive every audit event after it is written (and chained, when
@@ -530,7 +670,7 @@ export function createGovernanceKernel(config: GovernanceConfig = {}): Governanc
     // record uses the same id the runtime will send to enforce()).
     const id = input.id ?? crypto.randomUUID();
     const organizationId = resolveOrgId(input.organizationId, input.metadata);
-    const assessment = assessAgent(id, input);
+    const assessment = scoring.assess(id, input);
 
     // Persist capability booleans in metadata so re-scoring can reconstruct them
     const capabilities = {
@@ -637,8 +777,6 @@ export function createGovernanceKernel(config: GovernanceConfig = {}): Governanc
       return storage.countAuditEvents(filters);
     },
   };
-
-  const scoring = createScoringHooks(storage, storedToRegistration);
 
   async function enforceStage(ctx: EnforcementContext, stage: PolicyStage): Promise<EnforcementDecision> {
     const startedAt = performance.now();
@@ -808,7 +946,7 @@ export function createGovernanceKernel(config: GovernanceConfig = {}): Governanc
   const instance: GovernanceInstance = {
     register, enforce, enforcePreprocess, enforceToolResult, enforcePostprocess, audit,
     recordOutcome,
-    score: scoring.scoreAgent, scoreFleet: scoring.scoreFleet,
+    score: (agentId) => scoring.scoreAgent(agentId), scoreFleet: () => scoring.scoreFleet(),
     policies: readonlyPolicies, storage, addRule, removeRule,
     addSystemRule,
     removeSystemRule,

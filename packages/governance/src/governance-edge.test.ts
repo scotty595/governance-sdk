@@ -2,6 +2,8 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   createGovernance,
+  createGovernanceKernel,
+  defaultExtensions,
   blockTools,
   allowOnlyTools,
   requireLevel,
@@ -445,5 +447,98 @@ describe("score re-assessment", () => {
       () => gov.storage.updateAgent("nonexistent", { status: "approved" }),
       { message: /not found/i },
     );
+  });
+});
+
+// ─── bare kernel: no scoring extension ──────────────────────────
+
+// `createGovernanceKernel()` with no `extensions.scoring` has no opinion about
+// dimensions, weights or bands — those are ext. What it must NOT do is invent
+// a number. These pin the documented no-scorer contract, and pin that
+// `createGovernance()` is unaffected by it.
+
+describe("bare kernel scoring", () => {
+  test("register returns a level-0 assessment marked unscored, with no dimensions", async () => {
+    const gov = createGovernanceKernel({ extensions: {} });
+    const result = await gov.register({
+      name: "a", framework: "mastra", owner: "t",
+      hasAuth: true, hasGuardrails: true, hasObservability: true, hasAuditLog: true,
+    });
+
+    // Fully-configured agent, yet nothing scored it: the answer is 0/level 0.
+    assert.equal(result.score, 0);
+    assert.equal(result.level, 0);
+    assert.equal(result.status, "registered");
+    assert.equal(result.assessment.compositeScore, 0);
+    assert.equal(result.assessment.level.level, 0);
+    assert.equal(result.assessment.level.label, "Unscored");
+    // Load-bearing: no dimensions at all, so this cannot be mistaken for a
+    // scorer that ran and found zeros.
+    assert.deepEqual(result.assessment.dimensions, []);
+    assert.match(result.assessment.recommendations.join(" "), /No scoring extension installed/);
+  });
+
+  test("the unscored registration is persisted as level 0, not left blank", async () => {
+    const gov = createGovernanceKernel({ extensions: {} });
+    const result = await gov.register({ name: "a", framework: "mastra", owner: "t", hasAuth: true });
+    const stored = await gov.storage.getAgent(result.id);
+    assert.ok(stored);
+    assert.equal(stored?.compositeScore, 0);
+    assert.equal(stored?.governanceLevel, 0);
+  });
+
+  test("score() throws rather than returning null, which would mean 'no such agent'", async () => {
+    const gov = createGovernanceKernel({ extensions: {} });
+    const registered = await gov.register({ name: "a", framework: "mastra", owner: "t" });
+    await assert.rejects(() => gov.score(registered.id), {
+      name: "NoScorerError",
+      message: /gov\.score\(\) needs a scoring extension/,
+    });
+  });
+
+  test("scoreFleet() throws rather than reporting an empty fleet", async () => {
+    const gov = createGovernanceKernel({ extensions: {} });
+    await gov.register({ name: "a", framework: "mastra", owner: "t" });
+    await assert.rejects(() => gov.scoreFleet(), {
+      name: "NoScorerError",
+      message: /gov\.scoreFleet\(\) needs a scoring extension/,
+    });
+  });
+
+  test("the same kernel with defaultExtensions() scores exactly as createGovernance()", async () => {
+    const input = {
+      name: "a", framework: "mastra" as const, owner: "t",
+      hasAuth: true, hasGuardrails: true, hasObservability: true, hasAuditLog: true,
+    };
+    const wired = await createGovernanceKernel({ extensions: defaultExtensions() }).register(input);
+    const barrel = await createGovernance().register(input);
+
+    assert.ok(wired.score > 0);
+    assert.equal(wired.score, barrel.score);
+    assert.equal(wired.level, barrel.level);
+    assert.equal(wired.status, barrel.status);
+    assert.equal(wired.assessment.dimensions.length, barrel.assessment.dimensions.length);
+  });
+
+  test("a custom scoring extension is what register() reports", async () => {
+    const gov = createGovernanceKernel({
+      extensions: {
+        scoring: () => ({
+          assess: (agentId, registration) => ({
+            agentId, agentName: registration.name,
+            compositeScore: 77,
+            level: { level: 3 as const, label: "Governed", autonomy: "x", minScore: 61, maxScore: 80 },
+            dimensions: [], status: "approved" as const,
+            assessedAt: new Date().toISOString(), recommendations: [],
+          }),
+          scoreAgent: async () => null,
+          scoreFleet: async () => { throw new Error("not used here"); },
+        }),
+      },
+    });
+    const result = await gov.register({ name: "a", framework: "mastra", owner: "t" });
+    assert.equal(result.score, 77);
+    assert.equal(result.level, 3);
+    assert.equal(result.status, "approved");
   });
 });

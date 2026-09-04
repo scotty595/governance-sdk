@@ -1,18 +1,27 @@
 /**
- * Re-scoring an agent, and the fleet, from what they have actually done.
+ * The scoring extension: the 7-dimension posture model, and the re-score of it
+ * against what an agent has actually done.
  *
  * `assessAgent()` scores the posture an agent *declares* — auth, guardrails,
  * observability, audit. These hooks adjust that against its audit history
  * (block rate, injection hits, approval misses) so a well-configured agent
- * that misbehaves does not keep its score. Split out of the instance because
- * the only instance state they need is storage.
+ * that misbehaves does not keep its score.
+ *
+ * This is ext, not kernel: the seven dimensions, their weights and the level
+ * bands are one opinionated model among several, and a score is only
+ * comparable across runs that used the same weights. The kernel keeps the
+ * *concept* of a level — the number `requireLevel()` compares against
+ * `EnforcementContext.agentLevel` — and takes the computation from here
+ * through `KernelExtensions.scoring`. The barrel wires it, so
+ * `createGovernance()` scores exactly as it always has.
  */
 
-import { assessAgent, assessFleet, getGovernanceLevel, computeCompositeScore } from "./scorer.js";
-import { computeBehavioralAdjustments, applyBehavioralAdjustments } from "./behavioral-scorer.js";
-import type { AgentStatus, GovernanceAssessment, FleetSummary } from "./types.js";
-import type { GovernanceStorage, StoredAgent } from "./storage.js";
-import type { AgentRegistration } from "./types.js";
+import { assessAgent, assessFleet, getGovernanceLevel, computeCompositeScore } from "../scorer.js";
+import { computeBehavioralAdjustments, applyBehavioralAdjustments } from "../behavioral-scorer.js";
+import type { AgentStatus, GovernanceAssessment, FleetSummary } from "../types.js";
+import type { GovernanceStorage, StoredAgent } from "../storage.js";
+import type { AgentRegistration } from "../types.js";
+import type { KernelScoring, KernelScoringDeps } from "../governance.js";
 
 /** How many audit events to weigh when adjusting a score. */
 const BEHAVIORAL_WINDOW = 200;
@@ -133,4 +142,26 @@ export function createScoringHooks(
   }
 
   return { scoreAgent, scoreFleet };
+}
+
+/**
+ * The posture scorer as a kernel scoring extension — what
+ * `defaultExtensions()` puts in the `scoring` slot.
+ *
+ * A factory, because the two re-scoring methods need the kernel's storage and
+ * the kernel may have created it itself (`config.storage` is optional). It
+ * runs synchronously at construction so `register()`, which returns a score,
+ * never has to await a plugin.
+ *
+ * Type-only on the kernel: this imports `KernelScoring` from `governance.ts`
+ * and nothing else, so there is no runtime edge from ext back to core and no
+ * import cycle.
+ */
+export function scoringExtension(deps: KernelScoringDeps): KernelScoring {
+  const hooks = createScoringHooks(deps.storage, deps.storedToRegistration);
+  return {
+    assess: assessAgent,
+    scoreAgent: (agentId) => hooks.scoreAgent(agentId),
+    scoreFleet: () => hooks.scoreFleet(),
+  };
 }

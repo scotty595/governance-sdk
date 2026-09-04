@@ -2,13 +2,16 @@
  * The default extension set the package barrel wires onto the kernel.
  *
  * These are the pieces the SDK's documented behaviour depends on but the
- * kernel does not carry: the regex detector behind `injection_guard`, and the
- * sensitive-data corpus behind `sensitive_data_filter` and its redaction.
+ * kernel does not carry: the regex detector behind `injection_guard`, the
+ * sensitive-data corpus behind `sensitive_data_filter` and its redaction, and
+ * the 7-dimension posture scorer behind `register()`'s score, `score()` and
+ * `scoreFleet()`.
  *
  * They live here, in the extension layer, so `packages/core` can ship without
- * a detector. `createGovernance()` installs them, so a caller sees no
- * difference; `createGovernanceKernel()` does not, so a caller who wants a
- * bare kernel gets one that says what it is missing rather than pretending.
+ * a detector or a weight set. `createGovernance()` installs them, so a caller
+ * sees no difference; `createGovernanceKernel()` does not, so a caller who
+ * wants a bare kernel gets one that says what it is missing rather than
+ * pretending.
  */
 
 import type { RegisteredConditionType, EnforcementContext, PolicyRule } from "../policy.js";
@@ -18,6 +21,7 @@ import type { MaskStrategy } from "../plugin.js";
 import { detectInjection, type InjectionCategory } from "../injection-detect.js";
 import { evaluateSensitiveDataFilter } from "./sensitive-filter.js";
 import { maskSensitiveData } from "../mask.js";
+import { scoringExtension } from "./scoring-hooks.js";
 
 /** The regex detector, as the `injection_guard` condition. */
 export function injectionGuardCondition(): RegisteredConditionType {
@@ -83,5 +87,6 @@ export function defaultExtensions(): KernelExtensions {
   return {
     conditions: [injectionGuardCondition(), sensitiveDataFilterCondition()],
     maskStrategies: { sensitive_data_filter: sensitiveDataMaskStrategy },
+    scoring: scoringExtension,
   };
 }

@@ -36,14 +36,17 @@ import { defaultExtensions } from "./ext/defaults.js";
 /**
  * Create a governance instance.
  *
- * The kernel plus the default extension set — injection detection and
- * sensitive-data masking — so every built-in condition behaves as documented
- * without the caller knowing the plugin contract exists.
+ * The kernel plus the default extension set — injection detection,
+ * sensitive-data masking and the 7-dimension posture scorer — so every
+ * built-in condition, and `register()`'s score, behave as documented without
+ * the caller knowing the plugin contract exists.
  *
  * Pass `extensions` to replace the defaults, or `extensions: {}` to run a bare
  * kernel. Both are honest: asking for a kernel without the piece that
- * implements a condition gets you a rule that is rejected when added, and a
- * mask with no strategy that fails closed to `block`.
+ * implements a condition gets you a rule that is rejected when added, a mask
+ * with no strategy that fails closed to `block`, and — with no scorer — a
+ * `register()` that returns a level-0 assessment marked unscored while
+ * `score()` and `scoreFleet()` throw rather than invent a number.
  */
 export function createGovernance(config: GovernanceConfig = {}): GovernanceInstance {
   return createGovernanceKernel({ ...config, extensions: config.extensions ?? defaultExtensions() });
@@ -56,7 +59,10 @@ export type {
   ReadonlyPolicyEngine,
   ActionOutcome,
   KernelExtensions,
+  KernelScoring,
+  KernelScoringDeps,
 } from "./governance.js";
+export { NoScorerError, unscoredAssessment, NO_SCORER_LEVEL } from "./governance.js";
 export { defaultExtensions } from "./ext/defaults.js";
 export { createPolicyEngine } from "./policy-entry.js";
 
@@ -72,8 +78,8 @@ export { blockTools, allowOnlyTools, requireApproval, requireToolApproval, requi
 export type { PolicyRule, PolicyEngine, PolicyAction, PolicyCondition, PolicyOutcome, PolicyStage, ActionTier, EnforcementContext, EnforcementDecision, PolicyEngineConfig, ConditionEvaluator, RegisteredConditionType, PolicyValidationIssue, TaintMark, TaintSource, TaintFilter } from "./policy.js";
 export { createAuditChain, resolveOrgId } from "./audit-chain.js";
 export type { AuditChain, AuditChainDeps, ResolvedIntegrityConfig } from "./audit-chain.js";
-export { createScoringHooks } from "./scoring-hooks.js";
-export type { ScoringHooks } from "./scoring-hooks.js";
+export { createScoringHooks, scoringExtension } from "./ext/scoring-hooks.js";
+export type { ScoringHooks } from "./ext/scoring-hooks.js";
 export { createSessionLedger } from "./session-ledger.js";
 
 // ─── Plugins (ext) ──────────────────────────────────────────────

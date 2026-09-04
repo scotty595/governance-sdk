@@ -86,6 +86,11 @@ const LOGICAL_EXT = new Set([
   "storage-postgres.ts",
   "storage-postgres-schema.ts",
   "otel-hooks.ts",
+  // repository scanning — only repo-patterns and the barrel reach these
+  "import-lexer.ts",
+  "monorepo-detect.ts",
+  "scanner-plugins/types.ts",
+  "token-types.ts",
   // policy authoring surfaces
   "policy-yaml.ts",
   "policy-builder.ts",
@@ -99,20 +104,7 @@ const LOGICAL_EXT = new Set([
  * Keep this list shrinking. An entry that no longer matches a real import is
  * reported as stale, so a fix cannot leave dead scaffolding behind.
  */
-const EXCEPTIONS = new Map([
-  [
-    "governance.ts -> scorer.ts",
-    "register() scores an agent inline and returns the score, so scoring cannot be deferred to an async plugin without changing that signature. Resolve by making the scorer a kernel extension like the detector, once the package split proves the shape.",
-  ],
-  [
-    "scoring-hooks.ts -> scorer.ts",
-    "Same, for the re-scoring hooks. Moves to ext/scoring as a unit in Phase B.",
-  ],
-  [
-    "scoring-hooks.ts -> behavioral-scorer.ts",
-    "Same unit.",
-  ],
-]);
+const EXCEPTIONS = new Map([]);
 
 function walk(dir, out = []) {
   for (const entry of readdirSync(dir)) {
