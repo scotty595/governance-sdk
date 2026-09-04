@@ -8,9 +8,12 @@
  */
 
 /** Content kinds a rule can be scoped to. */
-export type Modality = "text" | "image" | "pdf" | "audio" | "video";
+// Four members, the same four 0.22.0 shipped. Widening this union is a
+// breaking change for every consumer that switches over it exhaustively —
+// add a member only with the scanner that handles it.
+export type Modality = "text" | "image" | "pdf" | "audio";
 
-export const MODALITIES: readonly Modality[] = ["text", "image", "pdf", "audio", "video"];
+export const MODALITIES: readonly Modality[] = ["text", "image", "pdf", "audio"];
 
 /**
  * Condition types whose `scanModalities` is meaningful. Everything else

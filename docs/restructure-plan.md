@@ -263,7 +263,7 @@ is now a build constraint rather than a lint over paths.
 | `@governance-sdk/adapters` (private) | core, plugins | 45 | 435 |
 | `governance-sdk` (publishable) | all three | 5 + 51 compatibility shims | 303 |
 
-Five things the move taught, beyond what the plan anticipated:
+Six things the move taught, beyond what the plan anticipated:
 
 - **The meta-package was uninstallable, and no test could see it.** Its
   dependencies are three private packages, and npm does not bundle workspace
@@ -275,6 +275,14 @@ Five things the move taught, beyond what the plan anticipated:
   in CI and the release workflow. The same check found a report crashing on
   an agent row without `tools`. An API-surface diff against `main`
   (`scripts/api-surface.mjs`) found one dropped type export at the root.
+- **A name-level API diff misses a widened union.** The split rewrote the
+  kernel's `Modality` with a fifth member, `"video"`, that nothing
+  implements. Every name still resolved and the symbol diff was clean; the
+  first real consumer typechecked against the packed tarball failed, because
+  it switches over that union exhaustively. The surface dump now records each
+  export's resolved type text, so a changed union or signature is a reported
+  change, and typechecking a downstream consumer against the tarball is on the
+  pre-merge checklist (`CONTRIBUTING.md` → Checking a refactor).
 
 - **The lint changed job and got stronger.** It no longer compares paths; it
   compares what a package *imports* against what it *declares*. That catches

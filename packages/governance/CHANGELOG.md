@@ -48,7 +48,12 @@ accommodate the move. See `docs/restructure-plan.md`.
   subpath; CI and the release workflow run it, and the release publishes the
   tarball rather than `npm publish -w`. An API-surface diff of every subpath
   against 0.22.0 (`scripts/api-surface.mjs`) showed no runtime export removed
-  and one dropped type export at the root, `FailModes`, now restored.
+  and one dropped type export at the root, `FailModes`, now restored. The
+  same diff extended to type text, plus a downstream consumer typechecked
+  against the tarball, found the kernel's `Modality` union had gained a
+  `"video"` member nothing implements — a break for any consumer that
+  switches over it exhaustively. Removed; the union is the four members
+  0.22.0 shipped.
 
 ### Added — new surface (phase C)
 
@@ -65,7 +70,8 @@ accommodate the move. See `docs/restructure-plan.md`.
   predicate for Cloudflare's confirmation prompt and is deliberately not
   auto-attached, because a chat confirmation is not the governance approval.
   Web-standard only, asserted by a test that walks the import graph.
-  `AgentFramework` gains `"cloudflare"`.
+  `AgentFramework` gains `"cloudflare"`; a `Record<AgentFramework, …>` in
+  your code needs the new key.
 - **Adapter kernel: `decide()` and `notify()`.** `enforce()` fires the
   outcome callbacks then throws; `enforceStage()` does neither; three
   verdict-returning seams (`canUseTool`, the hook, Agent Hooks `preTool`)

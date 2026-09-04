@@ -72,6 +72,42 @@ packages/
 - **Security vulnerabilities**: See [SECURITY.md](./SECURITY.md) — do not open a public issue
 - **Feature requests**: Open a [GitHub issue](https://github.com/scotty595/governance-sdk/issues) describing the use case
 
+## Checking a refactor
+
+The unit suite proves behaviour for code that resolves through workspace
+symlinks. Three checks see past that; run them before merging anything that
+moves code between packages or touches the exports map.
+
+1. **API surface.** Build `main` in a worktree and diff every subpath's
+   exported symbols, kinds and resolved type text against the branch:
+   ```sh
+   git worktree add /tmp/main-wt main && (cd /tmp/main-wt && npm ci && npm run build)
+   node scripts/api-surface.mjs /tmp/main-wt /tmp/api-main.json
+   node scripts/api-surface.mjs . /tmp/api-branch.json
+   node scripts/api-diff.mjs /tmp/api-main.json /tmp/api-branch.json
+   ```
+   A removed symbol, a changed kind, a widened union, a changed signature, or
+   a subpath that no longer imports is a finding. Decide each one on purpose;
+   a name-level diff alone would have missed the widened union that broke a
+   downstream consumer during the package split.
+2. **The tarball.** `npm run verify-pack` builds the self-contained tarball
+   and installs it into a fresh project outside the workspace, then imports
+   every subpath and runs the kernel, a standards report and the identity
+   plugin from the installed copy. CI runs it on every push.
+3. **A real consumer.** Install the tarball into a project that uses the SDK
+   and run its typecheck and tests. The non-invasive way is to swap it into
+   that project's `node_modules` and restore afterwards:
+   ```sh
+   npm run pack
+   cd ../consumer
+   mv node_modules/governance-sdk /tmp/sdk.bak && mkdir node_modules/governance-sdk
+   tar -xzf ../governance-sdk/dist/governance-sdk-<version>.tgz -C node_modules/governance-sdk --strip-components=1
+   npx tsc --noEmit; npm test
+   rm -rf node_modules/governance-sdk && mv /tmp/sdk.bak node_modules/governance-sdk
+   ```
+   Compare any error count with the same run on the currently installed
+   version, so pre-existing errors are not blamed on the change.
+
 ## Releasing
 
 Versions are tracked by git tags and the package changelog whether or not
