@@ -20,8 +20,9 @@
  *
  * All of them call the SDK's public enforce methods, which means the same
  * processor works in both local mode (in-process policy evaluation) and
- * remote mode (HTTP enforce against the governance cloud) — the integrator
- * controls this via createGovernance({ serverUrl, apiKey }).
+ * remote mode (HTTP enforce against a hosted governance API implementing the
+ * remote-enforcer contract) — the integrator controls this via
+ * createGovernance({ serverUrl, apiKey }).
  *
  * Types are in mastra-processor-types.ts.
  */
@@ -48,6 +49,10 @@ import type {
 } from "./mastra-processor-types.js";
 import { governStreamChunk } from "./mastra-processor-stream.js";
 import { scanToolResult } from "../tool-result-scan.js";
+import { appendTaint, type TaintMark } from "../taint.js";
+
+/** Key under which taint marks live in Mastra's per-request processor `state`. */
+const TAINT_STATE_KEY = "governance:taint";
 import {
   wrapToolWithGovernance,
   wrapToolsWithGovernance,
@@ -391,12 +396,15 @@ export class GovernanceProcessor implements MastraProcessorInterface {
         ...(providerExecuted ? { providerExecuted: true } : {}),
       },
       injectionThreshold: this.config.toolResultInjectionThreshold,
+      taint: this.taintFor(args.state),
     });
     const { decision } = scan;
     const info: MastraToolResultInfo = {
       toolName, toolCallId, args: args.args, result: args.result, providerExecuted,
     };
 
+    // Whatever the decision, the run has now ingested external content.
+    this.recordTaint(args.state, scan.taint);
     this.stats.toolResults.scanned++;
     this.config.onToolResult?.(decision, info);
 
@@ -479,6 +487,8 @@ export class GovernanceProcessor implements MastraProcessorInterface {
     // most tools without explicit configuration.
     const toolArgs = toolCall.args as Record<string, unknown> | undefined;
     const fields = extractFields(toolArgs, this.config.toolFieldExtraction, toolCall.toolName);
+    const actionTier = this.config.toolTiers?.[toolCall.toolName];
+    const taint = this.taintFor(args.state);
 
     const ctx: EnforcementContext = {
       agentId: this.agentId!,
@@ -490,9 +500,28 @@ export class GovernanceProcessor implements MastraProcessorInterface {
       targetPath: fields.targetPath,
       targetUrl: fields.targetUrl,
       sessionTokensUsed: this.config.sessionTokenTracker?.(),
+      ...(actionTier ? { actionTier } : {}),
+      ...(taint && taint.length > 0 ? { taint } : {}),
       ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
     };
     return this.governance.enforce(ctx);
+  }
+
+  /**
+   * Taint marks accumulated in this request's processor state. Mastra hands
+   * every hook the same `state` object for the duration of a request, which
+   * is exactly the scope provenance should have: "since this run began, the
+   * agent has ingested content from these tools."
+   */
+  private taintFor(state: unknown): TaintMark[] | undefined {
+    if (this.config.trackTaint === false || !isRecord(state)) return undefined;
+    const marks = state[TAINT_STATE_KEY];
+    return Array.isArray(marks) ? (marks as TaintMark[]) : undefined;
+  }
+
+  private recordTaint(state: unknown, mark: TaintMark): void {
+    if (this.config.trackTaint === false || !isRecord(state)) return;
+    state[TAINT_STATE_KEY] = appendTaint(this.taintFor(state), mark);
   }
 
   /**

@@ -43,7 +43,6 @@
  */
 
 import type { GovernanceInstance } from "../index";
-import type { OutcomeCallbacks } from "./outcome-handler.js";
 import { enforcePostprocess } from "./pre-post-enforce.js";
 import type { PrePostEnforceOptions } from "./pre-post-enforce.js";
 

@@ -19,7 +19,7 @@
  * stage automatically — no `wrapTool` needed on those versions.
  */
 
-import type { EnforcementDecision, PolicyAction } from "../policy";
+import type { ActionTier, EnforcementDecision, PolicyAction } from "../policy";
 import type { AgentFramework } from "../types";
 import type { ToolFieldExtractionRegistry } from "./mastra-processor-tool-wrap.js";
 
@@ -502,10 +502,34 @@ export interface GovernanceProcessorConfig {
   toolFieldExtraction?: ToolFieldExtractionRegistry;
   /**
    * Detection threshold for the local injection signal (0-1) computed by
-   * `detectInjection()` and passed to the engine via `ctx.mlInjectionScore`.
+   * `detectInjection()` and passed to the engine via `ctx.injectionScore`.
    * Default 0.5. Lower = more aggressive flagging; higher = more permissive.
    */
   toolResultInjectionThreshold?: number;
+
+  // ─── Consequence tiers + provenance — 0.22.0 ─────────────────
+  /**
+   * Map tool names to consequence tiers. The processor sets
+   * `ctx.actionTier` from this map on every tool-call enforcement so
+   * `requireTierApproval(['external', 'irreversible'])` can gate them.
+   * Unmapped tools carry no tier and never match a tier rule.
+   *
+   * @example
+   * ```ts
+   * toolTiers: { web_search: 'read', update_crm: 'reversible', send_email: 'external', delete_account: 'irreversible' }
+   * ```
+   */
+  toolTiers?: Record<string, ActionTier>;
+  /**
+   * Carry provenance across the run. Every tool result scanned by
+   * `processToolResult` leaves a taint mark in the request's processor
+   * `state`; subsequent tool calls in the same request carry those marks
+   * on `ctx.taint`, so `blockTaintedTools()` can require approval before a
+   * consequential tool acts on arguments derived from external content.
+   * Default: `true`. Marks live only for the request (Mastra's per-request
+   * processor state); nothing is persisted.
+   */
+  trackTaint?: boolean;
 
   // ─── Cross-stage callbacks — 0.8.0 ───────────────────────────
   /**

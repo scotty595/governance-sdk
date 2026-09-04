@@ -185,17 +185,27 @@ describe("Registered condition evaluation (instance-scoped)", () => {
     assert.equal(allowed.blocked, false);
   });
 
-  test("throws when condition type is not registered", () => {
+  test("rejects a rule whose condition type is not registered", () => {
+    // Validation happens when the rule is added, not on the first request.
+    assert.throws(
+      () => createPolicyEngine({
+        rules: [makeRule({
+          condition: { type: "nonexistent", params: {} },
+        })],
+      }),
+      /unknown condition type "nonexistent"/,
+    );
+  });
+
+  test("throws at evaluate time when the registry is cleared after rules were added", () => {
     const engine = createPolicyEngine({
-      rules: [makeRule({
-        condition: { type: "nonexistent", params: {} },
-      })],
+      rules: [makeRule({ condition: { type: "tool_blocked", params: { tools: ["danger"] } } })],
     });
     engine.clearConditionRegistry();
 
     assert.throws(
       () => engine.evaluate(makeCtx()),
-      /Unknown condition type "nonexistent"/,
+      /Unknown condition type "tool_blocked"/,
     );
   });
 

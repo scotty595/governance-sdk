@@ -1,10 +1,11 @@
 /**
  * Built-in condition evaluators — registered at engine initialization.
- * All 25 condition types from the original switch statement, now pluggable.
+ * 27 condition types (the original 25 plus `action_tier` and `tainted_input`), pluggable.
  */
 
-import type { ConditionEvaluator, EnforcementContext, PolicyCondition, PolicyRule } from "../policy.js";
+import type { ActionTier, ConditionEvaluator, EnforcementContext, PolicyCondition, PolicyRule } from "../policy.js";
 import { getScanText } from "../policy.js";
+import { hasTaint, type TaintSource } from "../taint.js";
 import { detectInjection } from "../injection-detect.js";
 import type { InjectionCategory } from "../injection-detect.js";
 import { evaluateBlocklist, evaluateInputLength, evaluateInputPattern } from "./preprocess.js";
@@ -130,7 +131,49 @@ export function getBuiltinConditions(
     {
       name: "rate_limit",
       description: "Limit actions per time window",
-      evaluator: (ctx, p) => (ctx.recentActionCount ?? 0) > (p.maxActions as number),
+      // Two paths. When the session ledger (or the host) supplies
+      // `recentActionTimestamps`, count the PRIOR actions inside this rule's
+      // own `windowMs` and block the (maxActions+1)-th — "100 per 60s" means
+      // exactly that. Otherwise fall back to the legacy host-supplied
+      // `recentActionCount`, keeping its original strictly-greater semantics.
+      evaluator: (ctx, p) => {
+        const maxActions = p.maxActions as number;
+        const windowMs = p.windowMs as number | undefined;
+        const stamps = ctx.recentActionTimestamps;
+        if (Array.isArray(stamps) && typeof windowMs === "number" && windowMs > 0) {
+          const since = Date.now() - windowMs;
+          let inWindow = 0;
+          for (let i = stamps.length - 1; i >= 0; i--) {
+            if (stamps[i] >= since) inWindow++;
+            else break;
+          }
+          return inWindow >= maxActions;
+        }
+        return (ctx.recentActionCount ?? 0) > maxActions;
+      },
+    },
+    // ─── Consequence + provenance ──────────────────────────────
+    {
+      name: "action_tier",
+      description: "Match actions whose consequence tier is in the list (read / reversible / external / irreversible)",
+      evaluator: (ctx, p) => {
+        const tiers = (p.tiers ?? []) as ActionTier[];
+        return ctx.actionTier !== undefined && tiers.includes(ctx.actionTier);
+      },
+    },
+    {
+      name: "tainted_input",
+      description:
+        "Match when the session has ingested untrusted content (tool results, retrieved context, MCP metadata, agent messages) " +
+        "and the current tool is in the guarded list (or any tool when no list is given)",
+      evaluator: (ctx, p) => {
+        const tools = p.tools as string[] | undefined;
+        if (Array.isArray(tools) && tools.length > 0 && (!ctx.tool || !tools.includes(ctx.tool))) return false;
+        return hasTaint(ctx.taint, {
+          sources: p.sources as TaintSource[] | undefined,
+          suspiciousOnly: p.suspiciousOnly === true,
+        });
+      },
     },
     {
       name: "data_classification",
@@ -202,9 +245,10 @@ export function getBuiltinConditions(
         "resulting score into mlInjectionScore — modality dispatch happens " +
         "at the host's hybridDetect call, not here.",
       evaluator: (ctx, p) => {
-        if (typeof ctx.mlInjectionScore !== "number") return false;
+        const score = ctx.injectionScore ?? ctx.mlInjectionScore;
+        if (typeof score !== "number") return false;
         const threshold = (p.threshold as number | undefined) ?? 0.5;
-        if (ctx.mlInjectionScore < threshold) return false;
+        if (score < threshold) return false;
         const requireCategory = p.requireCategory as string | undefined;
         if (requireCategory && !(ctx.mlInjectionCategories ?? []).includes(requireCategory)) {
           return false;

@@ -88,6 +88,13 @@ export interface GovernanceStorage {
    * from durable state instead of in-memory.
    */
   getAuditIntegrity?(eventId: string): Promise<StoredAuditIntegrity | null>;
+  /**
+   * Batch variant of `getAuditIntegrity` — one round-trip for a whole export
+   * instead of one per event. Return a map keyed by event id; ids with no
+   * integrity record are simply absent. Optional; `integrityChain.export()`
+   * uses it when present and falls back to per-event reads otherwise.
+   */
+  getAuditIntegrityBatch?(eventIds: string[]): Promise<Map<string, StoredAuditIntegrity>>;
 }
 
 /** Persisted agent record */
@@ -265,6 +272,14 @@ export function createMemoryStorage(): GovernanceStorage {
     async getAuditIntegrity(eventId) {
       const meta = integrity.get(eventId);
       return meta ? { ...meta } : null;
+    },
+    async getAuditIntegrityBatch(eventIds) {
+      const out = new Map<string, StoredAuditIntegrity>();
+      for (const id of eventIds) {
+        const meta = integrity.get(id);
+        if (meta) out.set(id, { ...meta });
+      }
+      return out;
     },
   };
 }

@@ -17,6 +17,13 @@
  */
 
 import type { PolicyRule, PolicyStage, PolicyOutcome } from "./policy.js";
+import { validateRuleShape, PolicyValidationError } from "./policy-validate.js";
+
+/**
+ * Keys that must never be assigned onto a parsed object. A YAML document is
+ * untrusted input; letting it set `__proto__` re-parents the parsed rule.
+ */
+const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 // ─── YAML Emitter ───────────────────────────────────────────
 
@@ -79,7 +86,15 @@ function quote(s: string): string {
 
 // ─── YAML Parser ────────────────────────────────────────────
 
-/** Deserialize a YAML string back to PolicyRule[] */
+/**
+ * Deserialize a YAML string back to PolicyRule[].
+ *
+ * Every rule is shape-validated (`validateRuleShape`) before it is returned:
+ * a misspelled outcome (`blcok`), a non-numeric priority, or an unknown
+ * stage throws `PolicyValidationError` here instead of producing a rule that
+ * never matches. Condition types are checked when the rules reach an engine
+ * (`createGovernance` / `addRule`), which knows what is registered.
+ */
 export function fromYAML(yaml: string): PolicyRule[] {
   const parsed = parseSimpleYAML(yaml);
   if (!parsed || !Array.isArray(parsed.rules)) {
@@ -90,19 +105,23 @@ export function fromYAML(yaml: string): PolicyRule[] {
     if (!raw.id || !raw.condition) throw new Error(`Invalid rule: missing id or condition`);
 
     const condition = raw.condition as Record<string, unknown>;
-    return {
+    const rule: PolicyRule = {
       id: String(raw.id),
       name: String(raw.name ?? ""),
       condition: {
         type: String(condition.type ?? ""),
         params: (condition.params ?? {}) as Record<string, unknown>,
       },
-      outcome: String(raw.outcome ?? "block") as PolicyOutcome,
+      // Omitted outcome defaults to block — the fail-closed choice.
+      outcome: (raw.outcome === undefined ? "block" : raw.outcome) as PolicyOutcome,
       reason: String(raw.reason ?? ""),
-      priority: Number(raw.priority ?? 50),
+      priority: raw.priority === undefined ? 50 : (raw.priority as number),
       enabled: raw.enabled !== false,
-      stage: raw.stage ? (String(raw.stage) as PolicyStage) : undefined,
+      stage: raw.stage === undefined ? undefined : (raw.stage as PolicyStage),
     };
+    const issues = validateRuleShape(rule);
+    if (issues.length > 0) throw new PolicyValidationError(rule.id, issues);
+    return rule;
   });
 }
 
@@ -129,6 +148,10 @@ function parseObject(lines: string[], start: number, minIndent: number): { value
 
     const [, , key, rest] = match;
     const valueIndent = lineIndent + 2;
+
+    if (FORBIDDEN_KEYS.has(key)) {
+      throw new Error(`Invalid YAML: key "${key}" is not allowed`);
+    }
 
     if (rest.trim() === "") {
       // Check if next non-empty line starts with "- " (array) or is a nested object
@@ -165,12 +188,19 @@ function parseArray(lines: string[], start: number, minIndent: number): { value:
     const trimmed = line.trim();
     if (trimmed.startsWith("- ")) {
       const value = trimmed.slice(2).trim();
-      if (value === "" || value.includes(":")) {
+      // An item is an inline object only when it starts with a bare `key:`
+      // (not a quoted scalar). Previously any colon — including the one in
+      // `- "http://evil.com"` — turned the item into an object, silently
+      // weakening allow/block lists loaded from YAML.
+      const inlineKey = /^([A-Za-z0-9_.-]+)\s*:(?:\s+(.*))?$/.exec(value);
+      const isQuoted = /^["']/.test(value);
+      if (value === "" || (inlineKey !== null && !isQuoted)) {
         // Complex array item — parse as object
         const nested = parseObject(lines, i + 1, lineIndent + 2);
-        if (value.includes(":")) {
-          const [k, v] = value.split(/:\s*(.*)/, 2);
-          const obj = { [k]: parseScalar(v ?? "") };
+        if (inlineKey) {
+          const k = inlineKey[1];
+          if (FORBIDDEN_KEYS.has(k)) throw new Error(`Invalid YAML: key "${k}" is not allowed`);
+          const obj: Record<string, unknown> = { [k]: parseScalar((inlineKey[2] ?? "").trim()) };
           Object.assign(obj, nested.value);
           arr.push(obj);
         } else {

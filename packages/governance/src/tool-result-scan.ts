@@ -31,6 +31,7 @@
 import type { GovernanceInstance } from "./index.js";
 import type { EnforcementContext, EnforcementDecision } from "./policy.js";
 import { detectInjection } from "./injection-detect.js";
+import { markTaint, type TaintMark } from "./taint.js";
 
 /**
  * Redacted result returned to the LLM in place of blocked content.
@@ -71,15 +72,27 @@ export interface ScanToolResultInput {
   injectionThreshold?: number;
   /**
    * Skip local detectInjection signal generation. Useful when the host has
-   * already populated `mlInjectionScore` from its own classifier (e.g. a
+   * already populated `injectionScore` from its own classifier (e.g. a
    * cloud preflight) and the local regex baseline would only add noise.
    */
   skipInjectionSignal?: boolean;
+  /**
+   * Taint marks already accumulated in this session, so `tool_result`-stage
+   * rules can reason about prior untrusted content too.
+   */
+  taint?: TaintMark[];
 }
 
 export interface ScanToolResultOutput {
   /** Engine decision — for audit and downstream handling. */
   decision: EnforcementDecision;
+  /**
+   * Provenance mark for THIS ingestion. Adapters append it to the session's
+   * taint list and carry the list on subsequent tool-call contexts so the
+   * `tainted_input` condition (and `blockTaintedTools()`) can fire. Marked
+   * `suspicious` when the detector scored the content over the threshold.
+   */
+  taint: TaintMark;
   /**
    * The value the caller should return from the wrapped tool. Equal to
    * the original `result` on allow / warn / mask passthrough; equal to a
@@ -143,15 +156,21 @@ export async function scanToolResult(input: ScanToolResultInput): Promise<ScanTo
   const text = extractScannableText(input.result);
 
   // ─── Signal generation (local mode) ────────────────────────────
-  let mlInjectionScore: number | undefined;
+  let injectionScore: number | undefined;
   let mlInjectionCategories: string[] | undefined;
+  let suspicious = false;
   if (!input.skipInjectionSignal && text.length > 0) {
     const scan = detectInjection(text, {
       threshold: input.injectionThreshold ?? 0.5,
     });
-    mlInjectionScore = scan.score;
+    injectionScore = scan.score;
+    suspicious = scan.detected;
     mlInjectionCategories = scan.categories.length > 0 ? [...scan.categories] : undefined;
   }
+  const taint = markTaint("tool_result", {
+    tool: input.tool,
+    ...(injectionScore !== undefined ? { suspicious, score: injectionScore } : {}),
+  });
 
   // ─── Build context for the engine ──────────────────────────────
   const ctx: EnforcementContext = {
@@ -162,11 +181,14 @@ export async function scanToolResult(input: ScanToolResultInput): Promise<ScanTo
     tool: input.tool,
     input: input.args,
     outputText: text,
-    mlInjectionScore,
+    injectionScore,
+    // Legacy alias — kept populated for hosts that read the old field.
+    mlInjectionScore: injectionScore,
     mlInjectionCategories,
     targetPath: input.fields?.targetPath,
     targetUrl: input.fields?.targetUrl,
     metadata: input.metadata,
+    ...(input.taint ? { taint: input.taint } : {}),
   };
 
   // ─── Enforce — engine is the sole decision-maker ───────────────
@@ -188,16 +210,16 @@ export async function scanToolResult(input: ScanToolResultInput): Promise<ScanTo
       reason: decision.reason,
       ruleId: decision.ruleId,
     };
-    return { decision, result: blocked, blocked: true };
+    return { decision, result: blocked, blocked: true, taint };
   }
 
   // mask outcome — substitute the masked text into a structurally similar
   // shape if the original was a string; otherwise pass through. Callers can
   // inspect `decision.maskedText` for finer-grained handling.
   if (decision.outcome === "mask" && decision.maskedText !== undefined && typeof input.result === "string") {
-    return { decision, result: decision.maskedText, blocked: false };
+    return { decision, result: decision.maskedText, blocked: false, taint };
   }
 
   // allow / warn — pass through unchanged
-  return { decision, result: input.result, blocked: false };
+  return { decision, result: input.result, blocked: false, taint };
 }
