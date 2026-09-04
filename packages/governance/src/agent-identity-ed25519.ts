@@ -111,13 +111,27 @@ export function createEd25519Identity(config: Ed25519Config = {}) {
       return { ...cert, signature: bufToHex(new Uint8Array(sig)) };
     },
 
-    /** Verify a certificate's signature and expiry */
-    async verifyCertificate(cert: AgentCertificate): Promise<{ valid: boolean; reason?: string }> {
+    /**
+     * Verify a certificate's signature and expiry.
+     *
+     * A self-signed certificate (`delegationDepth: 0`) is checked against its
+     * own embedded key. A delegated certificate is signed by its *issuer*, so
+     * pass the issuer's public key as `issuerPublicKeyHex` (normally the
+     * parent certificate's `publicKeyHex`); without it a delegated cert
+     * cannot verify.
+     */
+    async verifyCertificate(
+      cert: AgentCertificate,
+      issuerPublicKeyHex?: string,
+    ): Promise<{ valid: boolean; reason?: string }> {
       if (cert.expiresAt && new Date(cert.expiresAt).getTime() < Date.now()) {
         return { valid: false, reason: "Certificate has expired" };
       }
+      if (cert.delegationDepth > 0 && issuerPublicKeyHex === undefined) {
+        return { valid: false, reason: "Delegated certificate requires issuerPublicKeyHex to verify" };
+      }
 
-      const publicKey = await importPublicKey(cert.publicKeyHex);
+      const publicKey = await importPublicKey(issuerPublicKeyHex ?? cert.publicKeyHex);
       const { signature, ...certData } = cert;
       const canonical = JSON.stringify(deepSortKeys(certData));
       const encoded = new TextEncoder().encode(canonical);
@@ -129,7 +143,8 @@ export function createEd25519Identity(config: Ed25519Config = {}) {
 
     /**
      * Delegate identity to a child agent with narrowed capabilities.
-     * Child capabilities must be a subset of parent capabilities.
+     * Child capabilities must be a subset of parent capabilities; the child
+     * inherits the parent's expiry and cannot be minted from an expired parent.
      */
     async delegate(
       parentKey: CryptoKey,
@@ -139,6 +154,9 @@ export function createEd25519Identity(config: Ed25519Config = {}) {
       const depth = parentCert.delegationDepth + 1;
       if (depth > maxDelegationDepth) {
         throw new Error(`Delegation depth ${depth} exceeds maximum ${maxDelegationDepth}`);
+      }
+      if (parentCert.expiresAt && new Date(parentCert.expiresAt).getTime() < Date.now()) {
+        throw new Error("Cannot delegate from an expired parent certificate");
       }
 
       const invalid = child.capabilities.filter((c) => !parentCert.capabilities.includes(c));
@@ -217,5 +235,13 @@ export type {
   SignAgentIdentityInput,
   VerifyAgentIdentityOptions,
   VerifyAgentIdentityResult,
+  VerifyAgentIdentityFailureReason,
+  IdentityReplayStore,
+  MemoryReplayStore,
+  MemoryReplayStoreOptions,
 } from "./agent-identity-ed25519-token.js";
-export { signAgentIdentity, verifyAgentIdentity } from "./agent-identity-ed25519-token.js";
+export {
+  signAgentIdentity,
+  verifyAgentIdentity,
+  createMemoryReplayStore,
+} from "./agent-identity-ed25519-token.js";
