@@ -1,28 +1,52 @@
-name: Publish
+name: Release
+# Cuts a GitHub Release for every `v*` tag and — only when explicitly enabled —
+# publishes the packages to npm. Versions are tracked by tags and CHANGELOG
+# regardless of whether npm publishing is on, so flipping the switch later
+# publishes the next tag with no other change.
+#
+#   npm publishing is ON when either:
+#     - the repository variable PUBLISH_TO_NPM is set to "true"
+#       (Settings → Secrets and variables → Actions → Variables), or
+#     - this workflow is run manually with publish_npm = true.
+#   Otherwise the publish step is skipped and a notice is printed.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release or re-run, e.g. v0.22.0"
+        required: true
+        type: string
+      publish_npm:
+        description: "Also publish to npm (needs the NPM_TOKEN secret)"
+        required: false
+        type: boolean
+        default: false
 permissions:
-  # `contents: write` is needed for the "Create GitHub Release" step at
-  # the end (uses `gh release create`). Read-only is enough for the
-  # actual npm publish — that's authenticated via NODE_AUTH_TOKEN.
+  # `contents: write` for `gh release create`.
   contents: write
-  # `id-token: write` lets npm attach a signed provenance attestation that
-  # links the published tarball to this repository and workflow run.
+  # `id-token: write` lets npm attach a signed provenance attestation.
   id-token: write
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      PUBLISH_NPM: ${{ (inputs.publish_npm == true || vars.PUBLISH_TO_NPM == 'true') && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+          cache: npm
       - run: npm ci
       - name: Verify tag matches governance-sdk version
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          TAG="${RELEASE_TAG#v}"
           PKG_VERSION=$(node -p "require('./packages/governance/package.json').version")
           if [ "$TAG" != "$PKG_VERSION" ]; then
             echo "::error::Tag v$TAG does not match packages/governance/package.json version $PKG_VERSION"
@@ -31,7 +55,9 @@ jobs:
           echo "✓ Tag v$TAG matches governance-sdk version $PKG_VERSION"
       - run: npm run build
       - run: npm test
-      - name: Publish packages (skip already-published versions)
+
+      - name: Publish packages to npm (skip already-published versions)
+        if: env.PUBLISH_NPM == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -46,13 +72,18 @@ jobs:
             fi
           done
 
+      - name: npm publish paused
+        if: env.PUBLISH_NPM != 'true'
+        run: |
+          echo "::notice::npm publishing is paused; $RELEASE_TAG is released on GitHub only. To publish it later, set the repository variable PUBLISH_TO_NPM=true or run this workflow manually with publish_npm=true and tag=$RELEASE_TAG."
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"          # e.g. v0.14.1
-          VERSION="${TAG#v}"                # e.g. 0.14.1
+          TAG="${RELEASE_TAG}"             # e.g. v0.22.0
+          VERSION="${TAG#v}"               # e.g. 0.22.0
           CHANGELOG="packages/governance/CHANGELOG.md"
 
           # Skip if a release already exists for this tag (idempotent re-run).
@@ -74,7 +105,6 @@ jobs:
 
           # Extract the CHANGELOG body for this version: everything between
           # the version header and the next "## [" header (or end of file).
-          # The header line itself is dropped — the title carries that info.
           NOTES_FILE=$(mktemp)
           awk -v v="$VERSION" '
             $0 ~ "^## \\[" v "\\]" { capture=1; next }
@@ -84,6 +114,10 @@ jobs:
 
           if [ ! -s "$NOTES_FILE" ]; then
             echo "::warning::No CHANGELOG section found for $VERSION; release notes will be empty"
+          fi
+
+          if [ "$PUBLISH_NPM" != "true" ]; then
+            printf '\n---\n_Released on GitHub only; npm publishing is paused for this release. The package on npm may be older than this tag._\n' >> "$NOTES_FILE"
           fi
 
           # Pre-1.0 versions are technically prereleases by SemVer, but we
