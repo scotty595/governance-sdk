@@ -11,17 +11,6 @@ import { getSensitivePatterns } from "./conditions/sensitive-patterns.js";
 const REDACTED = "[REDACTED]";
 
 /**
- * Patterns that match specific token formats (sk-, ghp_, AKIA, etc.) should
- * run before broad patterns (aws_secret) to avoid partial matches.
- */
-const SPECIFIC_FIRST = new Set([
-  "generic_sk", "generic_pk", "anthropic_key", "stripe_key", "sendgrid_key",
-  "github_pat", "github_oauth", "github_app", "google_api_key", "aws_key",
-  "slack_token", "jwt", "private_key",
-  "postgres_uri", "mysql_uri", "mongodb_uri", "redis_uri",
-]);
-
-/**
  * System prompt leak patterns only match trigger phrases. For masking,
  * we redact from the trigger to the end of the sentence/line.
  */
@@ -30,35 +19,44 @@ const PROMPT_LEAK_IDS = new Set(["system_prompt_leak", "hidden_instructions", "n
 /**
  * Mask sensitive data detected by the built-in sensitive_data_filter patterns.
  * Returns the text with all matches replaced by [REDACTED].
+ *
+ * Every pattern is matched against the ORIGINAL text and the resulting spans
+ * are merged before anything is replaced. Replacing pattern-by-pattern would
+ * let an earlier pattern destroy the context a later one needs (aws_secret's
+ * AKIA… pairing, once aws_key has already redacted the key id) and could
+ * leave the tail of a token visible when two patterns overlap it. Merged
+ * spans make the result independent of pattern order.
  */
 export function maskSensitiveData(text: string, patternIds?: string[]): string {
-  const patterns = getSensitivePatterns(patternIds);
-
-  // Sort: specific token patterns first, broad patterns last
-  const sorted = [...patterns].sort((a, b) => {
-    const aSpecific = SPECIFIC_FIRST.has(a.id) ? 0 : 1;
-    const bSpecific = SPECIFIC_FIRST.has(b.id) ? 0 : 1;
-    return aSpecific - bSpecific;
-  });
-
-  let result = text;
-  for (const p of sorted) {
-    if (PROMPT_LEAK_IDS.has(p.id)) {
-      // For prompt leak patterns, redact from match to end of sentence/line
-      const extended = new RegExp(
-        p.pattern.source + "[^.\\n]*",
-        p.pattern.flags.includes("g") ? p.pattern.flags : p.pattern.flags + "g",
-      );
-      result = result.replace(extended, REDACTED);
-    } else {
-      const global = new RegExp(
-        p.pattern.source,
-        p.pattern.flags.includes("g") ? p.pattern.flags : p.pattern.flags + "g",
-      );
-      result = result.replace(global, REDACTED);
+  const spans: Array<[number, number]> = [];
+  for (const p of getSensitivePatterns(patternIds)) {
+    const source = PROMPT_LEAK_IDS.has(p.id) ? p.pattern.source + "[^.\\n]*" : p.pattern.source;
+    const flags = p.pattern.flags.includes("g") ? p.pattern.flags : p.pattern.flags + "g";
+    for (const m of text.matchAll(new RegExp(source, flags))) {
+      if (m[0].length === 0 || (p.validate && !p.validate(m[0]))) continue;
+      spans.push([m.index, m.index + m[0].length]);
     }
   }
-  return result;
+  return redactSpans(text, spans);
+}
+
+/** Replace each span with [REDACTED], merging spans that overlap or touch. */
+function redactSpans(text: string, spans: Array<[number, number]>): string {
+  if (spans.length === 0) return text;
+  spans.sort((a, b) => a[0] - b[0]);
+  let out = "";
+  let cursor = 0;
+  let [start, end] = spans[0];
+  for (const [s, e] of spans.slice(1)) {
+    if (s <= end) {
+      end = Math.max(end, e);
+      continue;
+    }
+    out += text.slice(cursor, start) + REDACTED;
+    cursor = end;
+    [start, end] = [s, e];
+  }
+  return out + text.slice(cursor, start) + REDACTED + text.slice(end);
 }
 
 /**

@@ -66,6 +66,7 @@ export { createGovernedMessageStream } from "./anthropic-stream.js";
 
 function buildRegistration(config: GovernAnthropicConfig, toolNames: string[]): AgentRegistration {
   return {
+    id: config.agentId,
     name: config.agentName,
     framework: config.framework ?? "anthropic",
     owner: config.owner,
@@ -82,11 +83,11 @@ function buildRegistration(config: GovernAnthropicConfig, toolNames: string[]): 
   };
 }
 
-function createEnforcer(governance: GovernanceInstance, agentId: string, config: GovernAnthropicConfig) {
+function createEnforcer(governance: GovernanceInstance, agentId: string, agentLevel: number, config: GovernAnthropicConfig) {
   return async (toolName: string, input?: Record<string, unknown>): Promise<EnforcementDecision> => {
     const action = config.actionMapper?.(toolName) ?? ("tool_call" as PolicyAction);
     const decision = await governance.enforce({
-      agentId, agentName: config.agentName, agentLevel: 0,
+      agentId, agentName: config.agentName, agentLevel,
       action, tool: toolName, input,
       sessionTokensUsed: config.sessionTokenTracker?.(),
     });
@@ -115,7 +116,7 @@ export async function governAnthropicTools(
   const reg = buildRegistration(config, toolNames);
   const result = await governance.register(reg);
 
-  const enforce = createEnforcer(governance, result.id, config);
+  const enforce = createEnforcer(governance, result.id, result.level, config);
   const audit = createAuditor(governance, result.id);
 
   const toolMap = new Map(tools.map((t) => [t.name, t]));
@@ -123,7 +124,7 @@ export async function governAnthropicTools(
   const governedTools: AnthropicToolExecutor[] = tools.map((tool) => ({
     ...tool,
     execute: async (input: Record<string, unknown>) => {
-      const decision = await enforce(tool.name, input);
+      await enforce(tool.name, input);
       try {
         const output = await tool.execute(input);
         await audit(tool.name, "success");

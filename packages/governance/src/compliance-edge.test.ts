@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createGovernance, blockTools, requireApproval, tokenBudget, rateLimit } from "./index";
 import { assessCompliance } from "./compliance";
 import { getArticles, getDaysUntilDeadline } from "./compliance-articles";
+import { EU_AI_ACT_SCHEDULE } from "./compliance-schedule";
 
 describe("compliance assessment edge cases", () => {
   test("empty fleet with no rules = low score", async () => {
@@ -62,12 +63,24 @@ describe("compliance assessment edge cases", () => {
     assert.equal(report.recommendations.length, unique.size);
   });
 
-  test("daysUntilDeadline is a positive number before deadline", () => {
+  test("daysUntilDeadline is positive before the Annex III high-risk date", () => {
     const days = getDaysUntilDeadline();
-    // Deadline is 2026-08-02, test should work until then
-    if (new Date() < new Date("2026-08-02")) {
+    // Annex III high-risk obligations apply from 2027-12-02 (post-Omnibus).
+    if (new Date() < new Date(EU_AI_ACT_SCHEDULE.milestones.annexIIIHighRisk.date)) {
       assert.ok(days > 0);
+    } else {
+      assert.ok(days <= 0);
     }
+  });
+
+  test("report annex defaults to III and phasedDeadlines follow the annex", async () => {
+    const gov = createGovernance();
+    const def = await assessCompliance({ governance: gov, agents: [] });
+    assert.equal(def.annex, "III");
+    assert.equal(def.phasedDeadlines.highRiskObligations, "2027-12-02");
+    const annexI = await assessCompliance({ governance: gov, agents: [], annex: "I" });
+    assert.equal(annexI.phasedDeadlines.highRiskObligations, "2028-08-02");
+    assert.equal(annexI.phasedDeadlines.article50Transparency, "2026-08-02");
   });
 
   test("getArticles returns 6 articles", () => {

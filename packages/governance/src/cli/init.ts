@@ -9,7 +9,7 @@
  */
 
 import { writeFileSync, existsSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 
 const RESET = "\x1b[0m";

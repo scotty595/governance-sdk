@@ -1,96 +1,46 @@
 /**
  * EU AI Act Article Definitions
  *
- * Static article and requirement definitions for the 6 EU AI Act
- * articles tracked by governance-sdk. Separated from assessment
- * logic to keep files under 300 LOC.
+ * Static article and requirement definitions for the 6 EU AI Act articles
+ * tracked by governance-sdk. Dates come from compliance-schedule.ts (never
+ * hard-coded here); assessment logic lives in compliance.ts.
  */
 
-// ─── Types ───────────────────────────────────────────────────
+import {
+  resolveDeadline,
+  type EuAiActAnnex,
+  highRiskMilestone,
+  daysUntil,
+} from "./compliance-schedule.js";
+import type { EuAiActArticle } from "./compliance-types.js";
 
-/** EU AI Act article with requirements and SDK feature mapping */
-export interface EuAiActArticle {
-  /** Article number */
-  article: string;
-  /** Article title */
-  title: string;
-  /** Brief description of the requirement */
-  description: string;
-  /** Enforcement deadline */
-  deadline: string;
-  /** Maximum fine */
-  maxFine: string;
-  /** Specific requirements that can be checked */
-  requirements: ArticleRequirement[];
-}
-
-/** A specific checkable requirement within an article */
-export interface ArticleRequirement {
-  /** Unique requirement ID (e.g., "art9-risk-classification") */
-  id: string;
-  /** What the law requires */
-  requirement: string;
-  /** How governance-sdk addresses this */
-  sdkFeature: string;
-  /** What to check for compliance */
-  checkDescription: string;
-  /** Whether this is automatically checkable by the SDK */
-  automatable: boolean;
-}
-
-/** Compliance status for a single requirement */
-export type ComplianceStatus = "compliant" | "partial" | "non-compliant" | "not-applicable";
-
-/** Assessment result for a single requirement */
-export interface RequirementAssessment {
-  requirementId: string;
-  status: ComplianceStatus;
-  evidence: string;
-  remediation?: string;
-}
-
-/** Assessment result for a full article */
-export interface ArticleAssessment {
-  article: string;
-  title: string;
-  coverage: ComplianceStatus;
-  score: number;
-  requirements: RequirementAssessment[];
-  deadline: string;
-  maxFine: string;
-}
-
-/** Full compliance report */
-export interface ComplianceReport {
-  overallScore: number;
-  status: ComplianceStatus;
-  articles: ArticleAssessment[];
-  agentsAssessed: number;
-  criticalGaps: string[];
-  recommendations: string[];
-  generatedAt: string;
-  /** Days until the soonest upcoming per-article deadline. Phased — see `phasedDeadlines`. */
-  daysUntilDeadline: number;
-  /** Not-legal-advice notice surfaced in the report output. */
-  disclaimer?: string;
-  /** The four EU AI Act phased enforcement milestones. */
-  phasedDeadlines?: {
-    prohibitedPractices: string;
-    gpaiTransparency: string;
-    highRiskObligations: string;
-    postMarketAndDownstream: string;
-  };
-}
+// Types live in compliance-types.ts; re-exported here because the OWASP,
+// NIST and ISO modules import the shared vocabulary from this path.
+export type {
+  StandardId,
+  ComplianceStatus,
+  RequirementAssessment,
+  ArticleAssessment,
+  EuAiActArticle,
+  ArticleRequirement,
+  ComplianceReport,
+} from "./compliance-types.js";
 
 // ─── Article Definitions ────────────────────────────────────
 
+const HIGH_RISK = resolveDeadline("highRisk", "III");
+const ART50 = resolveDeadline("article50Transparency");
+const HIGH_RISK_FINE = "Up to 15M EUR or 3% of global annual turnover";
+
 export const EU_AI_ACT_ARTICLES: EuAiActArticle[] = [
   {
+    standard: "eu-ai-act",
     article: "9",
     title: "Risk Management System",
     description: "Establish, implement, document, and maintain a risk management system throughout the AI system lifecycle.",
-    deadline: "2026-08-02",
-    maxFine: "Up to 15M EUR or 3% of global annual turnover",
+    phase: "highRisk",
+    deadline: HIGH_RISK,
+    maxFine: HIGH_RISK_FINE,
     requirements: [
       {
         id: "art9-risk-identification",
@@ -123,11 +73,13 @@ export const EU_AI_ACT_ARTICLES: EuAiActArticle[] = [
     ],
   },
   {
+    standard: "eu-ai-act",
     article: "11",
     title: "Technical Documentation",
     description: "Technical documentation shall be drawn up before the AI system is placed on the market or put into service.",
-    deadline: "2026-08-02",
-    maxFine: "Up to 15M EUR or 3% of global annual turnover",
+    phase: "highRisk",
+    deadline: HIGH_RISK,
+    maxFine: HIGH_RISK_FINE,
     requirements: [
       {
         id: "art11-system-description",
@@ -153,11 +105,13 @@ export const EU_AI_ACT_ARTICLES: EuAiActArticle[] = [
     ],
   },
   {
+    standard: "eu-ai-act",
     article: "12",
     title: "Record-Keeping",
     description: "AI systems shall technically allow for automatic recording of events (logs) throughout the system lifecycle.",
-    deadline: "2026-08-02",
-    maxFine: "Up to 15M EUR or 3% of global annual turnover",
+    phase: "highRisk",
+    deadline: HIGH_RISK,
+    maxFine: HIGH_RISK_FINE,
     requirements: [
       {
         id: "art12-automatic-logging",
@@ -190,11 +144,13 @@ export const EU_AI_ACT_ARTICLES: EuAiActArticle[] = [
     ],
   },
   {
+    standard: "eu-ai-act",
     article: "14",
     title: "Human Oversight",
     description: "AI systems shall be designed to be effectively overseen by natural persons during the period of use.",
-    deadline: "2026-08-02",
-    maxFine: "Up to 15M EUR or 3% of global annual turnover",
+    phase: "highRisk",
+    deadline: HIGH_RISK,
+    maxFine: HIGH_RISK_FINE,
     requirements: [
       {
         id: "art14-intervention",
@@ -220,11 +176,13 @@ export const EU_AI_ACT_ARTICLES: EuAiActArticle[] = [
     ],
   },
   {
+    standard: "eu-ai-act",
     article: "15",
     title: "Accuracy, Robustness, Cybersecurity",
     description: "AI systems shall achieve appropriate levels of accuracy, robustness, and cybersecurity.",
-    deadline: "2026-08-02",
-    maxFine: "Up to 15M EUR or 3% of global annual turnover",
+    phase: "highRisk",
+    deadline: HIGH_RISK,
+    maxFine: HIGH_RISK_FINE,
     requirements: [
       {
         id: "art15-resilience",
@@ -243,13 +201,16 @@ export const EU_AI_ACT_ARTICLES: EuAiActArticle[] = [
     ],
   },
   {
+    standard: "eu-ai-act",
     article: "50",
     title: "Transparency Obligations",
     description: "AI systems interacting with natural persons must disclose they are AI. AI-generated content must be machine-readable marked.",
-    // Art 50 (transparency) is part of the GPAI-transparency phase that
-    // entered force 2025-08-02 — NOT the 2026-08-02 high-risk phase.
-    deadline: "2025-08-02",
-    maxFine: "Up to 15M EUR or 3% of global annual turnover",
+    // Art 50 applies from 2026-08-02 under both the original Act and the
+    // Omnibus — it is neither the 2025-08-02 GPAI-model date nor deferred
+    // with the high-risk obligations. See compliance-schedule.ts.
+    phase: "article50Transparency",
+    deadline: ART50,
+    maxFine: HIGH_RISK_FINE,
     requirements: [
       {
         id: "art50-disclosure",
@@ -269,14 +230,12 @@ export const EU_AI_ACT_ARTICLES: EuAiActArticle[] = [
   },
 ];
 
-/** Get the list of EU AI Act articles tracked by this module */
-export function getArticles(): EuAiActArticle[] {
-  return EU_AI_ACT_ARTICLES;
+/** EU AI Act articles tracked by this module, with deadlines resolved for `annex`. */
+export function getArticles(annex: EuAiActAnnex = "III"): EuAiActArticle[] {
+  return EU_AI_ACT_ARTICLES.map((a) => ({ ...a, deadline: resolveDeadline(a.phase, annex) }));
 }
 
-/** Get days until EU AI Act enforcement deadline */
-export function getDaysUntilDeadline(): number {
-  const deadline = new Date("2026-08-02");
-  const now = new Date();
-  return Math.ceil((deadline.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+/** Days until the high-risk application date for `annex` (negative once past). */
+export function getDaysUntilDeadline(annex: EuAiActAnnex = "III", now: Date = new Date()): number {
+  return daysUntil(highRiskMilestone(annex).date, now);
 }

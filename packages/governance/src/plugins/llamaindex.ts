@@ -38,7 +38,7 @@ export type {
   GovernLlamaIndexConfig, GovernedLlamaIndexToolsResult, GovernedLlamaIndexAgentResult,
 } from "./llamaindex-types.js";
 
-import { handleOutcome, GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outcome-handler.js";
+import { handleOutcome } from "./outcome-handler.js";
 import type { OutcomeCallbacks } from "./outcome-handler.js";
 import { scanToolResult } from "../tool-result-scan.js";
 
@@ -62,6 +62,7 @@ export { GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outco
 
 function buildRegistration(config: GovernLlamaIndexConfig, toolNames: string[]): AgentRegistration {
   return {
+    id: config.agentId,
     name: config.agentName,
     framework: config.framework ?? "custom",
     owner: config.owner,
@@ -78,11 +79,11 @@ function buildRegistration(config: GovernLlamaIndexConfig, toolNames: string[]):
   };
 }
 
-function createEnforcer(governance: GovernanceInstance, agentId: string, config: GovernLlamaIndexConfig) {
+function createEnforcer(governance: GovernanceInstance, agentId: string, agentLevel: number, config: GovernLlamaIndexConfig) {
   return async (toolName: string, input?: Record<string, unknown>): Promise<EnforcementDecision> => {
     const action = config.actionMapper?.(toolName) ?? ("tool_call" as PolicyAction);
     const decision = await governance.enforce({
-      agentId, agentName: config.agentName, agentLevel: 0,
+      agentId, agentName: config.agentName, agentLevel,
       action, tool: toolName, input,
       sessionTokensUsed: config.sessionTokenTracker?.(),
     });
@@ -142,7 +143,7 @@ function wrapTool(
   return {
     ...tool,
     call: async (input: Record<string, unknown>): Promise<LlamaIndexJSONValue> => {
-      const decision = await enforce(toolName, input);
+      await enforce(toolName, input);
       try {
         const output = await tool.call!(input);
         const finalOutput = await scanResult(toolName, input, output);
@@ -167,7 +168,7 @@ export async function governLlamaIndexTools(
   const reg = buildRegistration(config, toolNames);
   const result = await governance.register(reg);
 
-  const enforce = createEnforcer(governance, result.id, config);
+  const enforce = createEnforcer(governance, result.id, result.level, config);
   const audit = createAuditor(governance, result.id);
   const scanResult = createResultScanner(governance, result.id, config);
 
@@ -193,7 +194,7 @@ export async function governLlamaIndexAgent(
   const reg = buildRegistration(config, toolNames);
   const result = await governance.register(reg);
 
-  const enforce = createEnforcer(governance, result.id, config);
+  const enforce = createEnforcer(governance, result.id, result.level, config);
   const audit = createAuditor(governance, result.id);
   const scanResult = createResultScanner(governance, result.id, config);
 

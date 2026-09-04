@@ -29,10 +29,13 @@ Everything downstream (scoring, audit, compliance) follows from those three.
 
 **Proof, not promises — tamper-evident audit by default.** Every `enforce()`
 decision and `recordOutcome()` outcome can be HMAC hash-chained (opt in with
-`integrityAudit: { signingKey }`). Any edit, deletion, or sequence-renumber
-breaks chain verification — verifiable offline anywhere with just the
-secret. None of the tools in the comparison table below document an
-equivalent (as of August 2026 — corrections welcome).
+`integrityAudit: { signingKey }`). Any edit, interior deletion, or
+sequence-renumber breaks chain verification — verifiable offline anywhere
+with just the secret. Tail truncation is the one deletion no hash chain can
+see on its own; anchor the head externally (see
+[Guarantees and non-guarantees](./docs/guarantees.md)). None of the tools in
+the comparison table below document an equivalent (as of August 2026 —
+corrections welcome).
 
 ## How it compares
 
@@ -58,8 +61,22 @@ The SDK is a **thin client** for local policy evaluation, scoring, and
 detection — nothing more. To pre-empt procurement and scope questions, here
 is exactly what it does and does not do:
 
-- **Kill switch is per-process**, not fleet-wide. Distributed halt is a host
-  concern — a hosted governance API or your own pub/sub.
+- **Kill switch is per-process**, not fleet-wide. Within the process it is a
+  system rule: it fires at every stage (prompt, tool call, tool result,
+  output) and, in hosted mode, is checked before the remote API is asked.
+  Distributed halt is a host concern — a hosted governance API or your own
+  pub/sub.
+- **Budgets and rate limits accumulate per process.** In local mode the
+  session ledger fills `recentActionTimestamps`, `sessionTokensUsed` and
+  `sessionCost` on the context, so `rateLimit()`, `tokenBudget()` and
+  `costBudget()` work without host wiring; host-supplied values always win.
+  For a fleet-wide limit, count in a shared store and set the fields yourself.
+- **Fail modes are explicit, and two of them fail open by default.** Hosted
+  fallback and chained-audit failure default to `allow`; mask failure,
+  malformed rules and kill-switch coverage always fail closed. `strict: true`
+  flips the first two to `block`. `gov.failModes()` reports the resolved
+  behaviour; pass `logger` to have it printed once at startup. Full table in
+  [docs/guarantees.md](./docs/guarantees.md).
 - **Process isolation is the security model.** The SDK runs as in-process
   TypeScript — `node:vm` is intentionally **not** used as a sandbox (per Node
   docs, it's not a security boundary). For untrusted code execution, isolate
@@ -69,14 +86,15 @@ is exactly what it does and does not do:
 - **No federation.** Cross-org policy replication and signed posture exchange
   are not currently shipped in the SDK.
 - **Injection detection is high-precision / low-recall** — regex baseline F1
-  ≈ 0.48 on the 6,931-sample LIB corpus. Layer in an ML classifier via the
+  ≈ 0.50 on the 6,931-sample LIB corpus. Layer in an ML classifier via the
   `InjectionClassifier` interface for production coverage.
 - **Compliance mapping is self-assessment**, not legal advice or certification.
-- **No built-in observability or eval pipeline.** The `metrics` and
-  `otel-hooks` exports produce passive in-memory data structures you serialize
-  to your own monitoring system; they are NOT OpenInference-compliant and NOT
-  a replacement for Phoenix, Langfuse, Braintrust, or a real OpenTelemetry
-  exporter. A first-class OTel/OpenInference exporter is on the roadmap.
+- **No exporter, no eval pipeline.** The instance emits typed events
+  (`gov.events`: enforcement, registration, policy changes, kill/revive) and
+  keeps counters and timings (`gov.metrics`), but shipping them anywhere is
+  your job. `otel-hooks` is a passive span shape, NOT OpenInference-compliant
+  and NOT a replacement for Phoenix, Langfuse, Braintrust, or a real
+  OpenTelemetry exporter. A first-class OTel exporter is on the roadmap.
 - **No built-in eval store.** `gov.eval.*` was removed in 0.11. Use inspect-ai,
   PyRIT, Garak, Phoenix, Langfuse, or your harness of choice and route results
   into your audit stream via `gov.audit.log()`.
@@ -92,8 +110,9 @@ is exactly what it does and does not do:
   HMAC chains are still only tamper-evident to holders of the signing
   secret — rotate and pair with an external anchor if you need
   adversary-grade non-repudiation.
-- **Hosted-mode `register()` is a synthetic confirmation** — the API
-  auto-registers on first `enforce()`.
+- **Hosted-mode `register()` posts to the API** and returns the server's
+  authoritative score and level; only when that call fails does it return a
+  synthetic confirmation so startup is never blocked on registration.
 - **No built-in red team / jailbreak harness.** Use inspect-ai, PyRIT, or
   Garak — a policy-only harness would be easily mistaken for model coverage.
 - **Bedrock is entry-gate only.** The Bedrock adapter scans the prompt
@@ -199,7 +218,7 @@ if (result.outcome === 'block') {
 
 ### Hosted Mode (remote enforcement)
 
-Set `serverUrl` and the SDK forwards `enforce()` / `register()` to a server instead of evaluating locally. The wire contract is whatever the SDK's [remote enforcer](./packages/governance/src/remote-enforce.ts) sends — any server that implements it works. [Lua Governance Cloud](https://heygovernance.ai) is one such implementation (ML-powered injection detection, approval workflows, fleet analytics, dashboard); it is a separate commercial product and not part of this repository.
+Set `serverUrl` and the SDK forwards `enforce()` / `register()` to a server instead of evaluating locally. The wire contract is documented in [docs/remote-contract.md](./docs/remote-contract.md) — any server that implements it works. [Lua Governance Cloud](https://heygovernance.ai) is one such implementation (ML-powered injection detection, approval workflows, fleet analytics, dashboard); it is a separate commercial product and not part of this repository. System rules (the kill switch) are evaluated locally before any remote call, and `audit.log()` / `recordOutcome()` write to local storage, not the API (the instance warns once at construction).
 
 ```typescript
 import { createGovernance } from 'governance-sdk';
@@ -207,7 +226,9 @@ import { createGovernance } from 'governance-sdk';
 const gov = createGovernance({
   serverUrl: process.env.GOVERNANCE_API_URL, // e.g. https://api.heygovernance.ai
   apiKey: process.env.GOVERNANCE_API_KEY,
-  fallbackMode: 'allow', // fail-open if API unreachable (default)
+  fallbackMode: 'allow', // fail-open whenever no valid decision can be obtained (default; 'block' under strict: true)
+  onFallback: (info) => log.warn(`governance fallback after ${info.attempts} attempt(s): ${info.reason}`),
+  redactInput: false,    // true strips input / inputText / outputText / metadata / textByModality before sending
 });
 
 // Verify connection at startup
@@ -216,11 +237,15 @@ console.log(status);
 // => { connected: true, mode: 'remote', latencyMs: 45, plan: 'pro', features: [...], agentQuota: { used: 3, limit: 25 } }
 ```
 
-The SDK retries transient failures with exponential backoff (3 attempts) and falls back gracefully when the API is unreachable — your agent never crashes from a governance outage.
+The SDK makes up to 4 requests (1 + `maxRetries`, default 3) with 100 / 500 / 2000 ms backoff, honouring `Retry-After` (capped at 30 s and at `timeout`), on network errors, 408, 425, 429 and 5xx. It then resolves the call by `fallbackMode` — as it also does for a non-auth 4xx (400, 404, 422) and for a 2xx body that does not match the decision contract (a bare `{}` is a fallback, never an allow). The only exceptions `enforce()` throws in hosted mode are `RemoteEnforcementError` for 401 / 403 (misconfiguration must be loud) and errors from your own `redactInput` function. `status().lastAttempts` reports the last call's request count.
 
 ### Approval Flows
 
-When a policy returns `require_approval`, the SDK provides the approval ID and a polling helper:
+Local mode has no approval broker: a local `require_approval` decision carries
+no `approvalId`, and `waitForApproval()` resolves `"timeout"` immediately —
+route the approval through your host (the decision's `reason`, `condition`
+and `remedy` tell the approver what is being asked). The flow below applies
+to hosted mode, where the server issues the approval ID and polling endpoint:
 
 ```typescript
 const decision = await gov.enforce({ agentId: 'bot', action: 'deploy', tool: 'prod_deploy' });
@@ -299,7 +324,7 @@ GOVERNANCE_API_URL=https://api.heygovernance.ai GOVERNANCE_API_KEY=ak_... npx go
 
 ### Policy Engine
 
-Define rules that govern agent behavior at runtime. Policies return one of **five outcomes**: `allow`, `block`, `warn`, `require_approval`, or `mask` (non-blocking redaction).
+Define rules that govern agent behavior at runtime. Policies return one of **five outcomes**: `allow`, `block`, `warn`, `require_approval`, or `mask` (non-blocking redaction). Every decision also carries the `stage` it was evaluated at, the `condition` type that matched and, for built-in conditions, a one-line `remedy` saying how to make the call pass. A `mask` rule that cannot produce redacted text degrades to `block` (`degradedFrom: "mask"`) rather than passing the original text through.
 
 **Preset policy builders:**
 
@@ -307,23 +332,65 @@ Define rules that govern agent behavior at runtime. Policies return one of **fiv
 - `allowOnlyTools(toolNames)` — whitelist-only tool access
 - `requireApproval(actionTypes)` — gate action *categories* (`ctx.action`) behind human approval
 - `requireToolApproval(toolNames)` — gate specific tools by name (`ctx.tool`) behind human approval
-- `tokenBudget(limit)` — enforce token consumption limits
-- `rateLimit(config)` — throttle agent requests. **Stateless** — the rule
-  reads `ctx.recentActionCount`, which your host populates. Durable
-  distributed rate limiting belongs in your API layer.
+- `requireTierApproval(tiers)` — gate actions by consequence tier (`read` / `reversible` / `external` / `irreversible`); adapters set `ctx.actionTier` from a tool → tier map
+- `blockTaintedTools(toolNames)` — require approval (or block) when a listed tool is called after the session has ingested untrusted content (tool results, retrieved documents, MCP metadata, other agents' messages)
+- `toolResultInjectionGuard()` — block tool *returns* that score as injection, at the `tool_result` stage
+- `tokenBudget(limit)` — cap session tokens; accumulated from `recordOutcome({ tokensUsed })` by the session ledger in local mode
+- `rateLimit(maxActions, windowMs)` — block the (max+1)-th allowed action inside
+  the window. Counted per process by the session ledger in local mode; a
+  host-supplied `ctx.recentActionCount` / `recentActionTimestamps` takes
+  precedence, which is how you plug in a shared counter for fleet-wide limits.
 
 **Extended presets** (also exported from the main package): `inputBlocklist`,
 `inputLength`, `inputPattern`, `networkAllowlist`, `scopeBoundary`,
 `costBudget`, `concurrentLimit`, `outputLength`, `outputPattern`,
-`sensitiveDataFilter`, `maskSensitiveOutput`, `maskOutputPattern`. Most
-rely on the host supplying relevant `ctx.*` fields (token counts, domain,
-cost, etc.) — like `rateLimit`, they are declarative gates, not accumulators.
+`sensitiveDataFilter`, `maskSensitiveOutput`, `maskOutputPattern`.
+`costBudget` accumulates from `recordOutcome({ cost })` in local mode;
+`networkAllowlist`, `scopeBoundary` and `concurrentLimit` read
+`ctx.targetUrl` / `targetPath` / `concurrentCount`, which adapters extract
+from tool arguments where they can and your host supplies otherwise.
+
+Sensitive-data patterns are precision-gated: `aws_secret` requires a secret
+label or a nearby `AKIA…` key id (bare 40-character tokens such as git SHAs
+are not redacted), `credit_card` is Luhn-checked, `phone_us` requires `+1`, a
+parenthesised area code or separators, and `ip_address` requires valid octets
+and ignores version strings. Custom `SensitivePattern`s may supply
+`validate(match)`. `maskSensitiveData` matches every pattern against the
+original text and merges overlapping spans.
 - `requireLevel(level)` — require minimum trust level
 - `requireSequence(steps)` — enforce ordered execution steps
 - `timeWindow(config)` — restrict actions to time windows
 - `requireSignedIdentity()` — require Ed25519 signed agent identity tokens
 
 Policies compose with `policy-compose` for complex rule sets, serialize to YAML (`policy-yaml`), and ship with a fluent `policy-builder`.
+
+**Validation.** Rules are validated when added — `createGovernance()`,
+`addRule()`, `createPolicyEngine()` and `fromYAML()` all reject a misspelled
+outcome or stage, a non-finite priority, an unregistered condition type, an
+uncompilable regex or a malformed nested condition with
+`PolicyValidationError`. A typo can no longer become a rule that silently
+never matches. User rule priorities are clamped to 998 with no opt-out;
+priority 999 is reserved for system rules installed by the kill switch.
+
+#### Consequence tiers and provenance
+
+Detection tells you an attack *might* be in the context. Two controls stop
+its consequences without needing to detect it:
+
+- **Tiers.** Map tools to `read` / `reversible` / `external` / `irreversible`
+  (the Mastra processor takes `toolTiers`; other adapters set
+  `ctx.actionTier`) and gate the consequential ones:
+  `requireTierApproval(['external', 'irreversible'])`.
+- **Taint.** Every tool result scanned by `scanToolResult()` yields a
+  provenance mark (`{ source: 'tool_result', tool, suspicious, score }`).
+  Adapters carry the run's marks on `ctx.taint`; the Mastra processor does
+  this automatically through Mastra's per-request processor state.
+  `blockTaintedTools(['send_email', 'shell_exec'])` then requires approval
+  before those tools act on arguments that may derive from external content.
+  Marks are per source and per run, deliberately: this is the architectural
+  control the prompt-injection literature (CaMeL, the six design patterns)
+  converges on, not byte-level information flow. Threat model in
+  [docs/threat-model.md](./docs/threat-model.md).
 
 ### Governance Scoring
 
@@ -364,14 +431,27 @@ flag mismatches. See `src/scorer-dimensions.ts` header comment and
 
 56 regex patterns across 7 categories (instruction override, role manipulation,
 context escape, data exfiltration, encoding attack, social engineering,
-obfuscation). Input normalisation includes: zero-width character stripping,
-NFKC Unicode folding (fullwidth/compatibility variants → ASCII), Cyrillic/Greek
-confusable (homoglyph) folding (`systеm prоmpt` → `system prompt`),
-spaced-character collapsing (`i g n o r e` → `ignore`), markdown-emphasis
-stripping (`ig**no**re` → `ignore`), leetspeak de-obfuscation (`1gn0r3 pr3v10us
-1nstruct10ns` → `ignore previous instructions`), and Base64 decode-and-rescan.
-Scoring is max-pattern-weight + multi-pattern and multi-category boosts, capped
-at 1.0.
+obfuscation). Input normalisation includes: Unicode format-character
+stripping (`\p{Cf}`: zero-width space/joiner, soft hyphen, LRM/RLM and other
+bidi marks, Tag characters), NFKC Unicode folding (fullwidth/compatibility
+variants → ASCII), removal of combining marks and variation selectors attached
+to Latin letters (`iǵnore` → `ignore`), Cyrillic/Greek/Armenian confusable
+(homoglyph) and IPA small-capital folding (`systеm prоmpt` → `system prompt`,
+`ɪɢɴᴏʀᴇ` → `ignore`), spaced-character collapsing (`i g n o r e` → `ignore`),
+markdown-emphasis stripping (`ig**no**re` → `ignore`), leetspeak
+de-obfuscation (`1gn0r3 pr3v10us 1nstruct10ns` → `ignore previous
+instructions`), and Base64 decode-and-rescan. Obfuscation-category patterns
+(zero-width runs, bidi overrides, fullwidth Latin, uncommon spaces, zalgo) are
+also matched against the raw input, since normalisation removes those
+characters. Scoring is max-pattern-weight + multi-pattern and multi-category
+boosts, capped at 1.0.
+
+All patterns are bounded, linear-time regexes, guarded by
+`injection-redos.test.ts` against 50KB adversarial inputs (shapes that took
+4–10 seconds, or minutes, before now take under 10ms). **The phrase corpus is
+English-only**: attacks phrased in other languages are not detected by the
+regex layer — use the `InjectionClassifier` interface for multilingual
+coverage.
 
 ```typescript
 import { detectInjection } from 'governance-sdk/injection-detect';
@@ -397,10 +477,10 @@ via `benchmark/scripts/run-full-baseline.ts`; committed report at
 
 | Metric | Value |
 |---|---|
-| Precision | 68.51% |
-| Recall | 37.26% |
-| F1 | 48.27% |
-| Accuracy | 75.85% |
+| Precision | 69.78% |
+| Recall | 39.55% |
+| F1 | 50.49% |
+| Accuracy | 76.54% |
 | False-positive rate | 7.43% |
 
 Reading this honestly: the zero-dep regex detector is a high-precision /
@@ -413,9 +493,10 @@ need stronger recall against in-the-wild jailbreak prompts.
 ### Tamper-Evident Audit Trail
 
 HMAC-SHA256 hash-chained audit. Each entry's hash covers the **previous hash +
-sequence number + canonicalised event body**, so any edit, deletion, or
-reorder-via-sequence-renumbering breaks verification. Constant-time hash
-comparison throughout — no timing oracle.
+sequence number + canonicalised event body**, so any edit, interior deletion,
+or reorder-via-sequence-renumbering breaks verification. Constant-time
+comparison for all HMAC verification (audit chain and identity tokens) — no
+timing oracle.
 
 **Opt-in via a single config flag.** Pass `integrityAudit: { signingKey }` to
 `createGovernance()` and every audit write the SDK makes is chained
@@ -569,10 +650,14 @@ unique-violation warnings until the last old process drains.
 
 ### Kill Switch
 
-Emergency halt for any agent, enforced via a reserved-priority policy rule
-(999). User-supplied rules are clamped to a max priority of 998 by the
-engine, so the kill switch remains unconditionally top priority — no
-"attacker rule at 1000 beats the kill switch" hole.
+Emergency halt for any agent, installed as a **system rule** at priority
+999. System rules are stage-agnostic — a killed agent is blocked at the
+prompt, the tool call, the tool result and the output — cannot be replaced or
+removed through `addRule()` / `removeRule()`, and are the only rules allowed
+above 998: user rules are clamped there with no id-prefix or other opt-out.
+In hosted mode the instance evaluates system rules locally *before* asking
+the remote API, so a kill issued in this process cannot be undone by a remote
+allow.
 
 ```typescript
 import { createKillSwitch } from 'governance-sdk/kill-switch';
@@ -598,24 +683,28 @@ includes its own disclaimer field so downstream consumers see the caveat.
 
 Scope disclosures:
 
-- **EU AI Act** (Reg. (EU) 2024/1689) — covers Arts. 9, 11, 12, 14, 15, 50 only.
-  Does NOT model prohibited practices (Art 5-7), data governance (Art 10), or
-  GPAI obligations beyond transparency (Arts 51-56). Deadlines are computed
-  per-article using the phased enforcement schedule (2025-02-02 prohibited
-  practices, 2025-08-02 GPAI transparency, 2026-08-02 high-risk obligations,
-  2027-08-02 post-market + downstream).
-- **OWASP Agentic** — maps governance state to 10 agentic-threat categories
-  (our "AA-01…AA-10" numbering is an internal convention; not the official
-  OWASP Top 10 for LLMs 2025 numbering). Inspired by OWASP work, not endorsed
-  by it.
+- **EU AI Act** (Reg. (EU) 2024/1689 as amended by Reg. (EU) 2026/1744, the
+  Digital Omnibus on AI) — covers Arts. 9, 11, 12, 14, 15, 50 only. Does NOT
+  model prohibited practices (Art 5-7), data governance (Art 10), or GPAI
+  obligations beyond transparency (Arts 51-56). Deadlines come from one
+  schedule object with cited sources: 2025-02-02 prohibited practices,
+  2025-08-02 GPAI model obligations, 2026-08-02 Art 50 transparency,
+  2027-12-02 Annex III high-risk obligations, 2028-08-02 Annex I high-risk
+  obligations. Pass `annex: "I"` for product-embedded systems (default
+  Annex III).
+- **OWASP Top 10 for Agentic Applications 2026** — maps governance state to
+  the ten official items ASI01–ASI10 (published 2025-12-09) and emits a
+  coverage matrix by official id. Pre-2026 `OWASP-AA-*` ids are preserved as
+  `legacyId`. Self-assessment against SDK-checkable mitigations; not
+  OWASP-endorsed.
 - **NIST AI RMF** — 14 subcategories across Govern/Map/Measure/Manage. Does
   NOT yet cover the NIST AI 600-1 GenAI Profile controls (2024).
 - **ISO/IEC 42001:2023** — clauses 4-6 and 8-10. Does NOT model the 39 Annex A
   informative controls.
 
 ```typescript
-import { mapToEuAiAct }      from 'governance-sdk/compliance';     // EU AI Act (6 articles) — preferred
-import { mapToOwaspAgentic } from 'governance-sdk/owasp-agentic';   // alias of assessOwaspAgentic
+import { mapToEuAiAct }      from 'governance-sdk/compliance';     // EU AI Act (6 articles, Annex I/III deadlines) — preferred
+import { mapToOwaspAgentic } from 'governance-sdk/owasp-agentic';   // alias of assessOwaspAgentic; also exports coverageMatrix()
 import { mapToNistAiRmf }    from 'governance-sdk/nist-ai-rmf';     // alias of assessNistAiRmf
 import { mapToIso42001 }     from 'governance-sdk/iso-42001';       // alias of assessIso42001
 
@@ -624,15 +713,22 @@ const report = await mapToEuAiAct({
   auditIntegrity: true, humanOversight: true,
 });
 // report.disclaimer — embedded "not legal advice" notice
-// report.phasedDeadlines — { prohibitedPractices, gpaiTransparency, highRiskObligations, postMarketAndDownstream }
+// report.regulationRevision, report.annex
+// report.phasedDeadlines — { prohibitedPractices, gpaiModelObligations, article50Transparency,
+//   annexIIIHighRisk, annexIHighRisk, highRiskObligations, gpaiTransparency (deprecated alias),
+//   postMarketAndDownstream (deprecated) }
 ```
 
 ### Agent Identity (Ed25519)
 
 Cryptographically-signed agent identity tokens using Ed25519 (RFC 8032) via
 `crypto.subtle`. Zero runtime dependencies. Tokens include a nonce (`jti`),
-expiry (`exp`), optional `kid` for key rotation, and the agent's public key
-so any verifier can re-check the signature.
+expiry (`exp`), optional `kid` for key rotation, optional `aud` / `iss`
+claims, and the agent's public key so any verifier can re-check the
+signature. The older shared-secret module `governance-sdk/agent-identity` is
+deprecated: its token format is now v2 with every claim (including expiry)
+under the signature, v1 tokens are rejected, and new code should use the
+Ed25519 module below.
 
 Pair with the `requireSignedIdentity()` policy to guarantee that enforce
 calls come from an agent that actually holds the private key. Note that the
@@ -668,6 +764,19 @@ const result = await verifyAgentIdentity(token, {
 with, so without pinning you're verifying "someone signed this" rather than
 "the expected agent signed this." Use `pinnedPublicKeyHex` whenever you
 already know which key the agent should be using.
+
+**Rotate, bind and prevent replay.** Rotate with
+`pinnedPublicKeysHex: [oldKey, newKey]` or resolve by `kid` with
+`resolvePublicKey(kid)`. Bind the audience: sign with `aud` and verify with
+`expectedAudience` — a token that carries `aud` will not verify without a
+matching expectation, so a token minted for service A cannot be replayed at
+service B. Prevent replay within the TTL with
+`replayStore: createMemoryReplayStore()` (single process) or your own
+`IdentityReplayStore` over Redis or Postgres. Every failure returns a
+distinct, typed `reason` (`VerifyAgentIdentityFailureReason`). Delegated
+certificates are verified against the issuer's key
+(`verifyCertificate(cert, issuerPublicKeyHex)`), and `delegate()` refuses an
+expired parent.
 
 ### Dry-Run Simulation
 
@@ -707,7 +816,7 @@ where all three hold.
 | Framework | Import Path | Input pre-scan | Output post-scan | Output streaming | Tool-call |
 |---|---|:-:|:-:|:-:|:-:|
 | Mastra (processor) | `governance-sdk/plugins/mastra-processor` | ✅ | ✅ | ✅ | ✅³ |
-| Vercel AI SDK | `governance-sdk/plugins/vercel-ai` | ✅ | ✅ | ✅ | ✅ |
+| Vercel AI SDK | `governance-sdk/plugins/vercel-ai` | ✅ | ✅ | ✅⁴ | ✅ |
 | OpenAI Agents SDK | `governance-sdk/plugins/openai-agents` | ✅ | ✅ | ✅¹ | ✅ |
 | LangChain | `governance-sdk/plugins/langchain` | ✅ | ✅ | ✅ | ✅ |
 | Anthropic SDK | `governance-sdk/plugins/anthropic` | ✅ | ✅ | ✅ | ✅ |
@@ -720,6 +829,7 @@ where all three hold.
 ¹ OpenAI Agents output guardrails fire at stream final assembly (SDK-native behavior).
 ² Mastra middleware exposes `scanInput` / `scanOutput` / `scanOutputStream` helpers — explicit calls you make from your runtime loop, rather than automatic lifecycle hooks. Use the `mastra-processor` export if you want automatic hooks via `inputProcessors[]` / `outputProcessors[]`.
 ³ Tool *results* are governed too. On `@mastra/core` ≥ 1.57 the processor implements the native `processToolResult` hook, so every tool return is scanned at the `tool_result` stage automatically: block → the result is replaced with `{ blocked, reason, ruleId }` via `messageList.updateToolInvocation` (or the run is tripwired with `toolResultBlockMode: 'abort'`); mask → the redacted text replaces it. Streaming clients see the processed value. On older Mastra, or for tools run outside the agent loop, use `processor.wrapTool()` / `wrapTools()` — wrapped tools are skipped by the hook, so mixing both never double-scans.
+⁴ Incremental in `sliding` / `per-chunk` mode (first text part emitted after one chunk, or after the lookback window); the default `buffered` mode returns the full response at once.
 
 ### Specialty
 
@@ -767,23 +877,32 @@ const agent = new Agent({
 });
 ```
 
-**Vercel AI SDK** — `experimental_wrapLanguageModel` middleware:
+**Vercel AI SDK** — `wrapLanguageModel` middleware (`ai` ≥ 4.2; on 3.4–4.1 import `experimental_wrapLanguageModel`):
 
 ```ts
-import { experimental_wrapLanguageModel, generateText } from 'ai';
+import { wrapLanguageModel, generateText } from 'ai';
 import { createGovernance } from 'governance-sdk';
 import { createGovernanceMiddleware } from 'governance-sdk/plugins/vercel-ai';
 
 const gov = createGovernance({ rules: [/* ... */] });
-const { id: agentId } = await gov.register({
+const { id: agentId, level: agentLevel } = await gov.register({
   name: 'sales', framework: 'vercel-ai', owner: 'team',
 });
 
-const model = experimental_wrapLanguageModel({
+const model = wrapLanguageModel({
   model: openai('gpt-4o'),
-  middleware: createGovernanceMiddleware(gov, { agentId }),
+  middleware: createGovernanceMiddleware(gov, { agentId, agentLevel }),
 });
 ```
+
+Requires `ai` ≥ 3.4.0 (LanguageModelV1) through 7.x (LanguageModelV4);
+streamed text is scanned in both the V1 `textDelta` and V2+ `delta` shapes.
+Streaming post-scan (`streamMode`) is incremental: `per-chunk` emits each
+text part after scanning it (time-to-first-token ≈ one chunk), `sliding`
+after `streamLookbackChunks` + 1 chunks, and the default `buffered` drains
+the full response before emitting anything. Read-ahead is bounded by the
+lookback window, and a block cancels the upstream stream — text already
+emitted in `sliding` / `per-chunk` has reached the client.
 
 **OpenAI Agents SDK** — native input/output guardrails:
 
@@ -797,8 +916,8 @@ import {
 const agent = new Agent({
   name: 'research',
   instructions: '...',
-  inputGuardrails: [createInputGuardrail(gov, { agentId })],
-  outputGuardrails: [createOutputGuardrail(gov, { agentId })],
+  inputGuardrails: [createInputGuardrail(gov, { agentId, agentLevel })],
+  outputGuardrails: [createOutputGuardrail(gov, { agentId, agentLevel })],
 });
 ```
 
@@ -809,7 +928,7 @@ import { ChatOpenAI } from '@langchain/openai';
 import { wrapChatModel } from 'governance-sdk/plugins/langchain';
 
 const model = new ChatOpenAI({ model: 'gpt-4o' });
-const guarded = wrapChatModel(model, gov, { agentId });
+const guarded = wrapChatModel(model, gov, { agentId, agentLevel });
 const res = await guarded.invoke([new HumanMessage('hello')]);
 ```
 
@@ -820,20 +939,43 @@ import Anthropic from '@anthropic-ai/sdk';
 import { createGovernedMessages } from 'governance-sdk/plugins/anthropic';
 
 const client = new Anthropic();
-const messages = createGovernedMessages(client.messages, gov, { agentId });
+const messages = createGovernedMessages(client.messages, gov, { agentId, agentLevel });
 const res = await messages.create({
   model: 'claude-sonnet-4-5', max_tokens: 1024,
   messages: [{ role: 'user', content: 'hi' }],
 });
 ```
 
-Every pre/post adapter accepts `{ preprocess: false }` or `{ postprocess: false }`
-to disable a stage. Both stages are on by default.
+Every pre/post wrapper accepts `{ preprocess: false }` or `{ postprocess: false }`
+to disable a stage (the Mastra processor spells these `skipPreprocess` /
+`skipPostprocess`). Both stages are on by default.
 
-All adapters handle all 5 enforcement outcomes with configurable callbacks:
+**Bring-your-own wrappers need the level too.** The wrappers above
+(`createGovernanceMiddleware` for Vercel, `createInputGuardrail`,
+`wrapChatModel`, `createGovernedMessages`, …) do not register the agent, so
+pass both `agentId` and `agentLevel` from `register()`. Without `agentLevel`
+the engine treats the agent as level 0 and `requireLevel(1+)` blocks every
+call.
+
+**Same policy, same answer on every adapter.** Every registering adapter
+(`createGovernedTools`, `governAnthropicTools`, `createGovernedMCP`,
+`createGovernedBedrock`, `governGenkitTools` / `governGenkitFlow`,
+LangChain `governTool(s)`, `governLlamaIndexTools` / `Agent`,
+`governMistralTools`, `governOllamaTools`, OpenAI `governAgent` /
+`governTools`, the Mastra processor) puts the level returned by `register()`
+on the context, and a cross-adapter parity test asserts identical outcomes
+for identical policies. They all accept an optional stable `agentId`,
+forwarded to `gov.register({ id })`, so process restarts reuse the same agent
+row with durable storage instead of minting a new one.
+
+All adapters handle all 5 enforcement outcomes with configurable callbacks
+(shown here on the Mastra middleware export; the Vercel middleware takes
+`{ agentId, agentLevel, … }` instead of registration fields):
 
 ```typescript
-const middleware = createGovernanceMiddleware(gov, {
+import { createGovernanceMiddleware } from 'governance-sdk/plugins/mastra';
+
+const middleware = await createGovernanceMiddleware(gov, {
   agentName: 'my-agent',
   owner: 'platform-team',
   framework: 'mastra',
@@ -870,13 +1012,13 @@ governance-sdk/injection-benchmark         LIB — 6.9K-sample benchmark runner
 # Audit + identity
 governance-sdk/audit-integrity             HMAC hash-chain primitives (createIntegrityAudit, verifyAuditIntegrity)
 governance-sdk/audit-integrity-verify      standalone chain verifier (for offline audit)
-governance-sdk/agent-identity              agent identity tokens
+governance-sdk/agent-identity              HMAC identity tokens (deprecated — use agent-identity-ed25519)
 governance-sdk/agent-identity-ed25519      Ed25519 signing + verification
 governance-sdk/kill-switch                 priority-999 emergency halt
 
 # Standards / compliance
-governance-sdk/compliance                  EU AI Act (6 articles + deadlines)
-governance-sdk/owasp-agentic               OWASP Top 10 for LLMs / Agentic
+governance-sdk/compliance                  EU AI Act (6 articles + Omnibus-era deadlines)
+governance-sdk/owasp-agentic               OWASP Top 10 for Agentic Applications 2026 (ASI01–ASI10)
 governance-sdk/nist-ai-rmf                 NIST AI RMF (Govern/Map/Measure/Manage)
 governance-sdk/iso-42001                   ISO/IEC 42001 controls
 
@@ -919,7 +1061,7 @@ top-level package export — `import { runWithOutcome } from 'governance-sdk'`.
 ## Project Stats
 
 - **0** runtime dependencies
-- **1,340** tests, 0 failures (`npm test`)
+- **1,837** tests, 0 failures (`npm test`)
 - **47** export paths — tree-shakeable, import only what you use
 - **TypeScript strict mode**, no `any` types in source
 - **MIT licensed**
@@ -955,6 +1097,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md). Security issues: see [SECURITY.md](./S
 
 ## Links
 
+- Docs: [Guarantees and non-guarantees](./docs/guarantees.md) · [Threat model](./docs/threat-model.md) · [Remote-enforcer wire contract](./docs/remote-contract.md) · [Restructure plan](./docs/restructure-plan.md)
 - Repository: [github.com/scotty595/governance-sdk](https://github.com/scotty595/governance-sdk)
 - npm: [governance-sdk](https://www.npmjs.com/package/governance-sdk) · [governance-sdk-platform](https://www.npmjs.com/package/governance-sdk-platform)
 - Maintainer: [Scott Waddell](https://github.com/scotty595)

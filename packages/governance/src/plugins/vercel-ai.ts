@@ -15,8 +15,8 @@
  * });
  *
  * const myTools = {
- *   webSearch: tool({ description: 'Search', parameters: z.object({ query: z.string() }), execute: async ({ query }) => ... }),
- *   crmUpdate: tool({ description: 'Update CRM', parameters: z.object({ id: z.string() }), execute: async ({ id }) => ... }),
+ *   webSearch: tool({ description: 'Search', inputSchema: z.object({ query: z.string() }), execute: async ({ query }) => ... }),
+ *   crmUpdate: tool({ description: 'Update CRM', inputSchema: z.object({ id: z.string() }), execute: async ({ id }) => ... }),
  * };
  *
  * // Wrap all tools with governance
@@ -29,6 +29,17 @@
  * // Use governed tools with generateText/streamText
  * const result = await generateText({ model, tools, prompt: '...' });
  * ```
+ *
+ * ## Version compatibility (checked against the published `ai` typings)
+ *
+ * `VercelTool` / `VercelToolExecutionOptions` mirror the `ai` 6 tool shape:
+ * `inputSchema` (ai ≥ 5.0, replaced `parameters`) plus `needsApproval`,
+ * `inputExamples`, `strict`, `title` and `toModelOutput({ output })`
+ * (ai ≥ 6.0). Every field is optional and `createGovernedTools` only replaces
+ * `execute`, so the wrapper also works structurally with `ai` 5.x tools and,
+ * via the deprecated `parameters` field, with 3.x / 4.x tools. Type-level
+ * floor: `ai` 6.0.0. `createGovernanceMiddleware` (vercel-ai-middleware.ts)
+ * has a separate, lower floor of `ai` 3.4.0 — see that file's header.
  */
 
 import type {
@@ -40,7 +51,7 @@ import type {
   PolicyAction,
 } from "../policy";
 import type { AgentRegistration, AgentFramework } from "../types";
-import { handleOutcome, GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outcome-handler.js";
+import { handleOutcome } from "./outcome-handler.js";
 import type { OutcomeCallbacks } from "./outcome-handler.js";
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -94,6 +105,13 @@ export interface VercelTool {
 }
 
 export interface GovernedToolsConfig {
+  /**
+   * Optional stable agent id, forwarded to `gov.register({ id })`. Pass the
+   * same value on every process start so registration re-binds to the
+   * existing agent row in durable storage instead of creating a new one.
+   * Omit to let the SDK mint a fresh UUID on each registration.
+   */
+  agentId?: string;
   agentName: string;
   owner: string;
   framework?: AgentFramework;
@@ -144,6 +162,7 @@ export async function createGovernedTools<
   config: GovernedToolsConfig,
 ): Promise<GovernedToolsResult<T>> {
   const registration: AgentRegistration = {
+    id: config.agentId,
     name: config.agentName,
     framework: config.framework ?? "vercel-ai",
     owner: config.owner,

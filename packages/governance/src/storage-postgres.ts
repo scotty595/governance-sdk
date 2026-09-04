@@ -319,6 +319,26 @@ export async function createPostgresStorage(
     return rowToIntegrityFields(row);
   }
 
+  async function getAuditIntegrityBatch(eventIds: string[]): Promise<Map<string, StoredAuditIntegrity>> {
+    const out = new Map<string, StoredAuditIntegrity>();
+    if (eventIds.length === 0) return out;
+    await ensureMigrated();
+    // One round-trip per export instead of one per event (the N+1 the
+    // per-event reader implies for large chains).
+    const result = await pool.query<AuditRow & { id: string }>(
+      `SELECT id, integrity_hash, integrity_previous_hash, integrity_sequence, integrity_signed_at FROM ${prefix}_audit_events WHERE id = ANY($1::text[])`,
+      [eventIds],
+    );
+    for (const row of result.rows) {
+      if (typeof row.integrity_sequence === "string") {
+        row.integrity_sequence = parseInt(row.integrity_sequence, 10);
+      }
+      const meta = rowToIntegrityFields(row);
+      if (meta) out.set(row.id, meta);
+    }
+    return out;
+  }
+
   async function countAuditEvents(filters?: AuditQueryFilters): Promise<number> {
     await ensureMigrated();
     if (!filters) {
@@ -347,6 +367,7 @@ export async function createPostgresStorage(
     appendToAuditChain,
     getChainHead,
     getAuditIntegrity,
+    getAuditIntegrityBatch,
     migrate,
     close: () => pool.end(),
   };

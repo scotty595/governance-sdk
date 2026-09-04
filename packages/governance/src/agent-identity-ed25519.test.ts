@@ -98,6 +98,61 @@ describe("Ed25519 Agent Identity", () => {
     assert.ok(delegated.keyPair.publicKeyHex);
   });
 
+  it("delegated certificate inherits the parent's expiry and verifies against the issuer's key", async () => {
+    const kp = await identity.generateKeyPair();
+    const parentCert = await identity.createCertificate(kp.privateKey, {
+      agentId: "parent", name: "parent-bot", capabilities: ["read", "write"],
+    });
+    const delegated = await identity.delegate(kp.privateKey, parentCert, {
+      agentId: "child", name: "child-bot", capabilities: ["write"],
+    });
+
+    assert.equal(delegated.certificate.expiresAt, parentCert.expiresAt);
+
+    // Signed by the parent, so it verifies against the parent's public key…
+    const withIssuer = await identity.verifyCertificate(delegated.certificate, parentCert.publicKeyHex);
+    assert.equal(withIssuer.valid, true);
+
+    // …not against its own embedded key, and never silently.
+    const noIssuer = await identity.verifyCertificate(delegated.certificate);
+    assert.equal(noIssuer.valid, false);
+    assert.match(noIssuer.reason ?? "", /issuerPublicKeyHex/);
+
+    const other = await identity.generateKeyPair();
+    const wrongIssuer = await identity.verifyCertificate(delegated.certificate, other.publicKeyHex);
+    assert.equal(wrongIssuer.valid, false);
+    assert.equal(wrongIssuer.reason, "Invalid certificate signature");
+  });
+
+  it("a delegated certificate with widened capabilities fails issuer verification", async () => {
+    const kp = await identity.generateKeyPair();
+    const parentCert = await identity.createCertificate(kp.privateKey, {
+      agentId: "parent", name: "parent", capabilities: ["read", "write"],
+    });
+    const delegated = await identity.delegate(kp.privateKey, parentCert, {
+      agentId: "child", name: "child", capabilities: ["read"],
+    });
+    const widened = { ...delegated.certificate, capabilities: ["read", "write"] };
+    const result = await identity.verifyCertificate(widened, parentCert.publicKeyHex);
+    assert.equal(result.valid, false);
+  });
+
+  it("refuses to delegate from an expired parent certificate", async () => {
+    const shortLived = createEd25519Identity({ certificateTtlMs: 1 });
+    const kp = await shortLived.generateKeyPair();
+    const parentCert = await shortLived.createCertificate(kp.privateKey, {
+      agentId: "parent", name: "parent", capabilities: ["read"],
+    });
+    await new Promise((r) => setTimeout(r, 5));
+
+    await assert.rejects(
+      () => shortLived.delegate(kp.privateKey, parentCert, {
+        agentId: "child", name: "child", capabilities: ["read"],
+      }),
+      /expired parent certificate/,
+    );
+  });
+
   it("rejects delegation with capabilities not held by parent", async () => {
     const kp = await identity.generateKeyPair();
     const parentCert = await identity.createCertificate(kp.privateKey, {

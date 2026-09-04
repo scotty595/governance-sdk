@@ -6,6 +6,15 @@ import {
   getDaysUntilDeadline,
 } from "./compliance-articles";
 import type { EuAiActArticle, ArticleRequirement } from "./compliance-articles";
+import {
+  EU_AI_ACT_SCHEDULE,
+  buildPhasedDeadlines,
+  daysUntil,
+  highRiskMilestone,
+  resolveDeadline,
+} from "./compliance-schedule";
+
+const AS_OF = new Date("2026-09-04T00:00:00Z");
 
 describe("EU_AI_ACT_ARTICLES structure", () => {
   test("has exactly 6 articles", () => {
@@ -28,17 +37,17 @@ describe("EU_AI_ACT_ARTICLES structure", () => {
     }
   });
 
-  test("deadlines follow the EU AI Act phased enforcement schedule", () => {
-    // Real phased enforcement: Art 50 (transparency) is part of the
-    // 2025-08-02 GPAI milestone; the high-risk obligations in Arts 9-15
-    // take effect 2026-08-02. See compliance.ts header comment.
+  test("deadlines follow the EU AI Act phased application schedule (post-Omnibus)", () => {
+    // Reg. (EU) 2024/1689 as amended by Reg. (EU) 2026/1744: Art 50 applies
+    // from 2026-08-02; the Annex III high-risk obligations in Arts 9-15 were
+    // deferred from 2026-08-02 to 2027-12-02. See compliance-schedule.ts.
     const expected: Record<string, string> = {
-      "9": "2026-08-02",
-      "11": "2026-08-02",
-      "12": "2026-08-02",
-      "14": "2026-08-02",
-      "15": "2026-08-02",
-      "50": "2025-08-02",
+      "9": "2027-12-02",
+      "11": "2027-12-02",
+      "12": "2027-12-02",
+      "14": "2027-12-02",
+      "15": "2027-12-02",
+      "50": "2026-08-02",
     };
     for (const art of EU_AI_ACT_ARTICLES) {
       assert.equal(
@@ -46,6 +55,13 @@ describe("EU_AI_ACT_ARTICLES structure", () => {
         expected[art.article],
         `Art. ${art.article}: expected deadline ${expected[art.article]}, got ${art.deadline}`,
       );
+    }
+  });
+
+  test("every article carries the standard discriminator and a phase", () => {
+    for (const art of EU_AI_ACT_ARTICLES) {
+      assert.equal(art.standard, "eu-ai-act");
+      assert.equal(art.phase, art.article === "50" ? "article50Transparency" : "highRisk");
     }
   });
 
@@ -173,14 +189,79 @@ describe("getArticles()", () => {
 });
 
 describe("getDaysUntilDeadline()", () => {
-  test("returns days relative to the fixed 2026-08-02 deadline", () => {
-    const days = getDaysUntilDeadline();
-    assert.ok(typeof days === "number");
-    if (new Date() < new Date("2026-08-02")) {
-      assert.ok(days > 0, `Expected positive days, got ${days}`);
-      assert.ok(days < 500, `Expected reasonable days count, got ${days}`);
-    } else {
-      assert.ok(days <= 0, `Deadline passed; expected non-positive days, got ${days}`);
+  test("counts to the Annex III high-risk date by default", () => {
+    assert.equal(getDaysUntilDeadline("III", AS_OF), 454);
+    assert.equal(getDaysUntilDeadline(undefined, AS_OF), 454);
+    assert.equal(getDaysUntilDeadline("I", AS_OF), 698);
+    assert.equal(typeof getDaysUntilDeadline(), "number");
+  });
+
+  test("goes negative once the milestone has passed", () => {
+    assert.ok(getDaysUntilDeadline("III", new Date("2028-01-01T00:00:00Z")) < 0);
+  });
+});
+
+describe("EU_AI_ACT_SCHEDULE", () => {
+  const m = EU_AI_ACT_SCHEDULE.milestones;
+
+  test("names the amended regulation and cites sources", () => {
+    assert.equal(EU_AI_ACT_SCHEDULE.regulationRevision, "Reg. (EU) 2024/1689 as amended by Reg. (EU) 2026/1744");
+    assert.equal(EU_AI_ACT_SCHEDULE.amendmentPublished, "2026-07-24");
+    assert.equal(EU_AI_ACT_SCHEDULE.amendmentInForce, "2026-07-27");
+    assert.ok(EU_AI_ACT_SCHEDULE.sourceUrls.length >= 2);
+    for (const url of EU_AI_ACT_SCHEDULE.sourceUrls) assert.match(url, /^https:\/\//);
+  });
+
+  test("milestone dates are correct and chronological", () => {
+    assert.equal(m.prohibitedPractices.date, "2025-02-02");
+    assert.equal(m.gpaiModelObligations.date, "2025-08-02");
+    assert.equal(m.article50Transparency.date, "2026-08-02");
+    assert.equal(m.annexIIIHighRisk.date, "2027-12-02");
+    assert.equal(m.annexIHighRisk.date, "2028-08-02");
+    const dates = Object.values(m).map((x) => x.date);
+    for (const d of dates) assert.match(d, /^\d{4}-\d{2}-\d{2}$/);
+    assert.deepEqual(dates, [...dates].sort());
+  });
+
+  test("records the pre-Omnibus dates the high-risk milestones superseded", () => {
+    assert.equal(m.annexIIIHighRisk.supersedes, "2026-08-02");
+    assert.equal(m.annexIHighRisk.supersedes, "2027-08-02");
+    assert.equal(m.article50Transparency.supersedes, undefined, "Art 50 was not deferred");
+  });
+
+  test("resolveDeadline / highRiskMilestone honour the annex", () => {
+    assert.equal(resolveDeadline("highRisk"), "2027-12-02");
+    assert.equal(resolveDeadline("highRisk", "III"), "2027-12-02");
+    assert.equal(resolveDeadline("highRisk", "I"), "2028-08-02");
+    assert.equal(resolveDeadline("article50Transparency", "I"), "2026-08-02");
+    assert.equal(resolveDeadline("article50Transparency", "III"), "2026-08-02");
+    assert.equal(highRiskMilestone().label, "Annex III high-risk");
+    assert.equal(highRiskMilestone("I").label, "Annex I high-risk");
+  });
+
+  test("buildPhasedDeadlines populates legacy keys and new keys consistently", () => {
+    const iii = buildPhasedDeadlines();
+    assert.equal(iii.gpaiTransparency, iii.gpaiModelObligations);
+    assert.equal(iii.highRiskObligations, iii.annexIIIHighRisk);
+    assert.equal(iii.postMarketAndDownstream, iii.annexIHighRisk);
+    assert.notEqual(iii.article50Transparency, iii.gpaiModelObligations);
+    const i = buildPhasedDeadlines("I");
+    assert.equal(i.highRiskObligations, i.annexIHighRisk);
+    assert.equal(i.article50Transparency, "2026-08-02");
+  });
+
+  test("daysUntil is ceil-days and negative after the date", () => {
+    assert.equal(daysUntil("2027-12-02", AS_OF), 454);
+    assert.equal(daysUntil("2026-08-02", AS_OF), -33);
+  });
+
+  test("getArticles(annex) re-resolves only the high-risk deadlines", () => {
+    const i = getArticles("I");
+    assert.equal(i.length, 6);
+    for (const art of i) {
+      assert.equal(art.deadline, art.phase === "highRisk" ? "2028-08-02" : "2026-08-02", `Art ${art.article}`);
     }
+    // The static table itself is never mutated.
+    assert.equal(EU_AI_ACT_ARTICLES.find((a) => a.article === "9")!.deadline, "2027-12-02");
   });
 });

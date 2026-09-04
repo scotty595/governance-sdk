@@ -1,5 +1,179 @@
 # Changelog
 
+## [Unreleased] — Kernel hardening, fail-closed defaults, tiers and provenance
+
+Closes the four high-severity findings from the September 2026 review and the
+medium ones behind them, then adds the controls the roadmap's second block
+asked for. Every guarantee below is asserted by a named test; see
+`docs/guarantees.md`. Not published to npm yet.
+
+### Security
+
+- **Kill switch covered every stage in the README but only the `process`
+  stage in code.** Kill rules are now *system rules*: stage-agnostic
+  (`enforcePreprocess`, `enforceToolResult` and `enforcePostprocess` all
+  block a killed agent), not removable through `gov.removeRule()`, and in
+  hosted mode evaluated locally *before* the remote API is called, so a
+  local kill cannot be undone by a remote allow. Previously `kill()` in
+  hosted mode changed nothing the API consulted.
+- **Priority-clamp escape closed.** Any rule whose id began with `__` skipped
+  the 998 clamp, so a YAML rule `id: __x, priority: 1000, outcome: allow`
+  outranked the kill switch. System rules are now tracked in a private set
+  populated only by `addSystemRule()`; all user rules are clamped, no opt-out.
+- **ReDoS in the injection detector.** `excessive_spacing` was quartic (a
+  512-character `aaa…    bbb…` input took 36 s; 6 KB blocked the event loop
+  for minutes); `unicode_homoglyph`, `markdown_injection`, `override_system`,
+  `persist_override`, `future_sessions`, `forced_tool_call`,
+  `agent_worm_propagation`, `authority_claim_override`, `new_role_unrestricted`
+  and `base64_payload` had quadratic-or-worse tails, as did the
+  `email_address` sensitive pattern. All 56 injection and 27 sensitive-data
+  patterns are now bounded, linear-time regexes; 50 KB adversarial inputs
+  that took 4–10 s (or minutes) take under 10 ms, benign 50 KB prose is
+  unchanged at ~4 ms. `injection-redos.test.ts` times every pattern against
+  pathological shapes under a 150 ms budget. `markdown_injection` no longer
+  requires the closing `)`; `excessive_spacing` requires both gaps within
+  500 characters on one line.
+- **HMAC identity token expiry was unsigned.** `agent-identity` tokens are now
+  v2: the signature covers every claim including `expiresAt`, comparison is
+  constant-time, secrets must be ≥ 16 bytes, and v1 tokens are rejected —
+  re-issue outstanding HMAC tokens after upgrading. The module is deprecated
+  in favour of `agent-identity-ed25519`.
+- **Mask failed open at the preprocess stage.** Adapters put prompt text under
+  `input.message` while the engine masked `input.prompt`, so a `mask` rule
+  returned `outcome: "mask"` with no `maskedText` and the original reached
+  the LLM. The engine now reads `inputText`, then `input.message` / `prompt`
+  / `text`, and when no redaction can be computed it degrades the decision
+  to `block` with `degradedFrom: "mask"`. `sensitive_data_filter` scans the
+  same text sources, so an SSN in a prompt can be masked before the model.
+- **Rules are validated at every entry point.** `createGovernance()`,
+  `addRule()`, `createPolicyEngine()` and `fromYAML()` reject a misspelled
+  outcome or stage, a non-finite priority, an unregistered condition type, an
+  uncompilable regex or a malformed nested condition with
+  `PolicyValidationError`. The YAML loader no longer turns `- "http://x"`
+  into an object (which silently weakened allow/block lists) and refuses
+  `__proto__` / `constructor` / `prototype` keys.
+- **Ed25519 verification hardened.** Optional `aud` / `iss` claims with
+  `expectedAudience` / `expectedIssuer`; replay rejection via a pluggable
+  `IdentityReplayStore` (`createMemoryReplayStore()` shipped); key rotation
+  via `pinnedPublicKeysHex` or `resolvePublicKey(kid)`; typed failure
+  reasons. `verifyCertificate()` can now verify delegated certificates
+  against the issuer key (they were unverifiable before); `delegate()`
+  refuses an expired parent.
+- **Empty integrity signing keys are rejected**; keys under 16 characters
+  warn (and are rejected under `strict`).
+- **Nine adapters hard-coded `agentLevel: 0`**, so `requireLevel(1)` blocked
+  every call through Anthropic, OpenAI Agents, MCP, Genkit, LlamaIndex,
+  Mistral, Ollama, Bedrock and LangChain while Mastra and Vercel passed. All
+  adapters now carry the level `register()` returned; `adapter-parity.test.ts`
+  asserts identical outcomes across all ten.
+
+### Added
+
+- **Session ledger.** In local mode the instance keeps per-session action
+  timestamps, token and cost totals and fills `recentActionTimestamps`,
+  `recentActionCount`, `sessionTokensUsed` and `sessionCost` on the context
+  before evaluation, so `rateLimit(n, windowMs)` finally honours its window
+  and `tokenBudget()` / `costBudget()` accumulate from
+  `recordOutcome({ tokensUsed, cost })`. Host-supplied values win. Configure
+  or disable with `ledger`. `ActionOutcome` gains `cost` and `metadata`.
+- **Consequence tiers.** `ctx.actionTier` (`read` / `reversible` /
+  `external` / `irreversible`), the `action_tier` condition and
+  `requireTierApproval(tiers)`. The Mastra processor maps tools with
+  `toolTiers`.
+- **Provenance (taint).** `ctx.taint: TaintMark[]`, the `tainted_input`
+  condition, `blockTaintedTools(tools, opts)`, and helpers `markTaint`,
+  `hasTaint`, `appendTaint`. `scanToolResult()` returns a mark for every
+  ingestion (`suspicious` when the detector fired) and accepts prior marks;
+  the Mastra processor records marks in Mastra's per-request processor state
+  and carries them on subsequent tool calls (`trackTaint`, default on).
+- **`toolResultInjectionGuard()`** — the first shipped preset at the
+  `tool_result` stage. `mlInjectionGuard()` accepts `stage`. The detector's
+  score is now `ctx.injectionScore` (`mlInjectionScore` kept as an alias).
+- **Decisions that teach.** Every decision carries `stage`, `condition.type`
+  and, for built-ins, a one-line `remedy`.
+- **Explicit fail modes.** `strict: true` flips `fallbackMode` and
+  `integrityAudit.onFailure` to `block`; `gov.failModes()` reports the
+  resolved behaviour; `logger` prints it once at construction and receives
+  warnings (weak key, hosted-mode local audit writes).
+- **Events and metrics wired in.** `gov.events` emits `enforcement`,
+  `registration`, `policy_added`, `policy_removed`, `kill`, `revive`;
+  `gov.metrics` counts enforcement outcomes and registrations and times
+  enforcement.
+- **Stable `agentId`** on every registering adapter, forwarded to
+  `gov.register({ id })`, so restarts reuse the agent row.
+- **Vercel streaming is incremental.** `wrapStreamWithGovernance` is a
+  pull-based stream: `per-chunk` emits after one chunk (first-chunk latency
+  505 ms → 101 ms on a 5 × 100 ms source), `sliding` after the lookback
+  window, `buffered` unchanged. Backpressure is respected and a block cancels
+  the source. LanguageModelV1 `textDelta` parts are scanned too.
+- `getAuditIntegrityBatch` on the storage contract (memory and Postgres
+  adapters implement it), removing the N+1 read from `integrityChain.export()`.
+- `docs/guarantees.md`, `docs/threat-model.md`, `docs/remote-contract.md`,
+  `docs/restructure-plan.md`.
+- `audit-chain-truncation.test.ts` asserts the documented limit that tail
+  truncation is not detectable (thanks to the reader of issue #3).
+
+### Changed
+
+- The remote enforcer validates the decision shape (a malformed response is a
+  transport failure resolved by `fallbackMode`), retries 408 / 425 / 429 with
+  `Retry-After`, throws only on 401 / 403, and resolves other 4xx by
+  `fallbackMode` instead of throwing. New `onFallback` and `redactInput`
+  options. The wire contract is documented in `docs/remote-contract.md`.
+- Hosted mode warns once (via `logger` and `onAuditError`) that
+  `audit.log()`, `recordOutcome()` and kill-switch events write to local
+  storage, not the API.
+- Imported HMAC keys are cached (bounded), removing ~35 µs per chained event.
+- **Normalisation.** A `\p{Cf}` strip replaces the hand-maintained zero-width
+  list (closes the Tag-character, LRM/RLM, word-joiner and soft-hyphen
+  bypasses); combining marks and variation selectors attached to Latin letters
+  are removed (`iǵnore`); the confusable map now covers IPA small capitals,
+  more Cyrillic and Greek, and Armenian. Obfuscation-category patterns also run
+  on the raw input — `zero_width_chars`, `fullwidth_latin`, `uncommon_spaces`
+  and `homoglyph_ignore` had been dead since NFKC normalisation was introduced
+  and fire again. The phrase corpus is documented as English-only. LIB regex
+  baseline F1 0.492 → 0.505 (committed baseline regenerated).
+- **Sensitive-data patterns are precision-gated.** `SensitivePattern.validate`
+  hook; `luhnValid` and `matchesSensitivePattern` exported. `aws_secret`
+  requires a secret label within 40 characters or an `AKIA…` id within 120
+  (git SHA-1s are no longer redacted); `credit_card` is Luhn-checked;
+  `phone_us` requires `+1`, `(xxx)` or full separators; `ip_address` requires
+  octets ≤ 255 and skips version strings; the `email_address` `[A-Z|a-z]`
+  typo is fixed. `maskSensitiveData` matches every pattern against the
+  original text and merges overlapping spans (adjacent hits collapse into one
+  `[REDACTED]`).
+- `package.json` declares `"sideEffects": false`.
+- README: "any deletion breaks verification" narrowed to *interior* deletion;
+  constant-time claim widened to identity tokens; approval flow marked
+  hosted-only; kill-switch, preset, adapter and Vercel sections rewritten to
+  match behaviour.
+
+### Breaking-ish (pre-1.0)
+
+- Rules with unknown condition types are rejected when added, not when first
+  evaluated. Register custom conditions before adding rules that use them.
+- `mask` with no computable redaction is now `block`, not a pass-through.
+- `agent-identity` v1 tokens no longer verify; secrets under 16 bytes throw.
+- A token carrying `aud` will not verify unless the verifier passes
+  `expectedAudience`.
+- `rateLimit()` now actually limits in local mode. Hosts that relied on it
+  being inert should pass `ledger: false` or supply their own counts.
+- **Standards mappings corrected.** EU AI Act deadlines follow Reg. (EU)
+  2026/1744: Annex III high-risk obligations 2027-12-02 (was hard-coded
+  2026-08-02), Annex I 2028-08-02, Art 50 transparency 2026-08-02 (was
+  wrongly 2025-08-02). `ComplianceReport` gains required `regulationRevision`,
+  `annex` and new `phasedDeadlines` keys (`gpaiModelObligations`,
+  `article50Transparency`, `annexIIIHighRisk`, `annexIHighRisk`); the old keys
+  remain as deprecated aliases. Assessment config accepts `annex` and `asOf`.
+  The OWASP module adopts the official Top 10 for Agentic Applications 2026:
+  `risks[].id` is `ASI01`–`ASI10` (was `OWASP-AA-0x`, kept as `legacyId`),
+  requirement ids are `asiNN-*` (were `aaNN-*`), titles are the official
+  ones, and the report carries `standard`, `revision`, `publishedOn`,
+  `sourceUrl` and a `coverageMatrix`.
+- Hosted mode: non-auth 4xx responses no longer throw; they resolve by
+  `fallbackMode`. `status().mode` is `"fallback"` after any fallback decision
+  even when the API answered.
+
 ## [0.21.0] - 2026-08-26 — Independent maintenance, `demo` command
 
 governance-sdk is now maintained independently at

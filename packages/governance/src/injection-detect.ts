@@ -4,6 +4,15 @@
  * Detects common prompt injection patterns in agent inputs.
  * Pattern definitions are in injection-patterns.ts.
  *
+ * **Scope: the phrase corpus is English-only.** The built-in patterns match
+ * English attack phrasing. Input normalisation (see normalizeInput) folds
+ * Unicode look-alikes — fullwidth and math-styled letters, confusable
+ * Cyrillic/Greek/Armenian glyphs, IPA small capitals, combining marks,
+ * zero-width and other format characters — back to ASCII, so English phrases
+ * written with those glyphs still match. Attacks phrased in other languages
+ * are not detected; layer an ML classifier (injection-classifier.ts) for
+ * multilingual coverage.
+ *
  * @example
  * ```ts
  * import { detectInjection, createInjectionGuard } from 'governance-sdk/injection-detect';
@@ -28,6 +37,11 @@ export interface InjectionPattern {
   description: string;
 }
 
+/**
+ * Pattern categories. `obfuscation` is special: patterns in that category
+ * are also matched against the raw (un-normalised) input, because
+ * normalisation removes the very characters they detect.
+ */
 export type InjectionCategory =
   | "instruction_override"
   | "role_manipulation"
@@ -60,43 +74,81 @@ export interface InjectionDetectorConfig {
 // ─── Detection Engine ───────────────────────────────────────────
 
 /**
- * Strip zero-width characters, normalize Unicode to NFKC (compatibility +
- * canonical), and fold Cyrillic/Greek confusables to Latin so fullwidth,
- * circled, superscript, and homoglyph evasions collapse to their ASCII form
- * before pattern matching.
+ * Fold the input toward plain ASCII before pattern matching:
+ *
+ *   1. strip every Unicode format character (`\p{Cf}`: zero-width
+ *      space/joiner/non-joiner, soft hyphen, word joiner, BOM, LRM/RLM and
+ *      the other bidi controls, the U+E0000 Tags block, …) — one property
+ *      class instead of a hand-maintained list, so an `ignore` split by a Tag
+ *      character (U+E0061) or an LRM (U+200E) collapses back to `ignore`;
+ *   2. NFKD — compatibility decomposition (fullwidth `Ｉ` → `I`, math-bold
+ *      𝐢 → `i`, superscripts → digits, ligatures) with accents split off
+ *      their base letters;
+ *   3. drop combining marks (`\p{M}`, which also covers the FE00–FE0F and
+ *      E0100–E01EF variation selectors) that follow a Latin letter, so
+ *      `iǵnore`, `prëvïöüs` or `ignore`+U+FE0F read as plain ASCII, then
+ *      recompose (NFC) so non-Latin scripts are left canonical;
+ *   4. map Cyrillic/Greek/Armenian look-alikes and IPA small capitals to
+ *      Latin — see CONFUSABLES.
+ *
+ * Steps 1–3 remove exactly the characters the obfuscation-category patterns
+ * look for, which is why detectInjection() also runs those on the raw input.
  */
 function normalizeInput(input: string): string {
-  // Remove zero-width characters (U+200B, U+200C, U+200D, U+FEFF, U+00AD, U+2060, U+180E)
-  const stripped = input.replace(/[\u200B-\u200D\uFEFF\u00AD\u2060\u180E]/g, "");
-  // NFKC folds compatibility variants (fullwidth `Ｉ` → `I`, superscripts → digits, etc.)
-  const nfkc = stripped.normalize("NFKC");
-  // Fold confusables that NFKC leaves alone (Cyrillic/Greek lookalikes).
-  return nfkc.replace(CONFUSABLE_RE, (ch) => CONFUSABLES[ch] ?? ch);
+  const stripped = input.replace(FORMAT_CHARS_RE, "");
+  const folded = stripped.normalize("NFKD").replace(LATIN_MARKS_RE, "").normalize("NFC");
+  return folded.replace(CONFUSABLE_RE, (ch) => CONFUSABLES[ch] ?? ch);
 }
+
+/** Unicode format characters (general category Cf). */
+const FORMAT_CHARS_RE = /\p{Cf}/gu;
+
+/** Combining marks attached to a Latin letter (applied after NFKD). */
+const LATIN_MARKS_RE = /(?<=[A-Za-z])\p{M}+/gu;
 
 /**
  * Confusable (homoglyph) folding map: Unicode lookalikes → their Latin form.
- * NFKC does NOT fold these (Cyrillic `а`, Greek `ο` are distinct codepoints,
- * not compatibility variants), so an attack like `systеm prоmpt` (Cyrillic
- * е/о) survives NFKC untouched. We map the common Cyrillic/Greek confusables
- * back to Latin so they match the same patterns as their ASCII form. Targets
- * are lowercase — all injection patterns are case-insensitive, so the case of
- * the folded form is irrelevant.
+ * NFKC does NOT fold these (Cyrillic `а`, Greek `ο`, small capital `ɪ` are
+ * distinct codepoints, not compatibility variants), so an attack like
+ * `systеm prоmpt` (Cyrillic е/о) or `ɪɢɴᴏʀᴇ` survives NFKC untouched. We map
+ * the common look-alikes back to Latin so they match the same patterns as
+ * their ASCII form. Targets are lowercase — all injection patterns are
+ * case-insensitive, so the case of the folded form is irrelevant.
+ *
+ * Curated from Unicode's confusables.txt, not exhaustive: it covers the
+ * scripts attackers actually reach for (Cyrillic, Greek, Armenian, IPA small
+ * capitals, dotless/script Latin variants).
  */
 const CONFUSABLES: Record<string, string> = {
   // Cyrillic → Latin
   "а": "a", "е": "e", "о": "o", "р": "p", "с": "c",
   "у": "y", "х": "x", "і": "i", "ѕ": "s", "ј": "j",
   "к": "k", "м": "m", "н": "h", "в": "b", "т": "t",
+  "һ": "h", "ԁ": "d", "ԛ": "q", "ԝ": "w", "ԍ": "g",
+  "ѵ": "v", "ӏ": "i",
   "А": "a", "В": "b", "Е": "e", "К": "k", "М": "m",
   "Н": "h", "О": "o", "Р": "p", "С": "c", "Т": "t",
-  "У": "y", "Х": "x", "І": "i", "Ј": "j",
+  "У": "y", "Х": "x", "І": "i", "Ј": "j", "Ѕ": "s",
+  "Һ": "h", "Ԁ": "d", "Ԛ": "q", "Ԝ": "w", "Ԍ": "g",
+  "Ѵ": "v", "Ӏ": "i",
   // Greek → Latin
   "ο": "o", "α": "a", "ε": "e", "ι": "i", "κ": "k",
   "ν": "v", "ρ": "p", "τ": "t", "υ": "u", "χ": "x",
+  "η": "n", "γ": "y", "μ": "u", "ω": "w", "ς": "s",
+  "ϲ": "c", "ϳ": "j", "ϱ": "p",
   "Α": "a", "Β": "b", "Ε": "e", "Η": "h", "Ι": "i",
   "Κ": "k", "Μ": "m", "Ν": "n", "Ο": "o", "Ρ": "p",
-  "Τ": "t", "Υ": "y", "Χ": "x",
+  "Τ": "t", "Υ": "y", "Χ": "x", "Ζ": "z", "Ϲ": "c",
+  // Armenian → Latin
+  "օ": "o", "ո": "n", "ս": "u", "հ": "h",
+  // IPA / phonetic small capitals → Latin
+  "ᴀ": "a", "ʙ": "b", "ᴄ": "c", "ᴅ": "d", "ᴇ": "e",
+  "ꜰ": "f", "ɢ": "g", "ʜ": "h", "ɪ": "i", "ᴊ": "j",
+  "ᴋ": "k", "ʟ": "l", "ᴍ": "m", "ɴ": "n", "ᴏ": "o",
+  "ᴘ": "p", "ʀ": "r", "ꜱ": "s", "ᴛ": "t", "ᴜ": "u",
+  "ᴠ": "v", "ᴡ": "w", "ʏ": "y", "ᴢ": "z",
+  // Other Latin look-alikes
+  "ı": "i", "ȷ": "j", "ɡ": "g", "ɑ": "a",
 };
 
 const CONFUSABLE_RE = new RegExp(`[${Object.keys(CONFUSABLES).join("")}]`, "g");
@@ -231,12 +283,27 @@ export function detectInjection(
   const demarkdown = stripMarkdownEmphasis(normalized);
   if (demarkdown !== normalized) variants.push({ suffix: ":demarkdown", text: demarkdown });
 
+  /** Record a hit once per pattern id; `nudge` marks deliberate evasion. */
+  const record = (pattern: InjectionPattern, suffix: string, nudge: number): void => {
+    matchedPatterns.push(pattern.id + suffix);
+    matchedIds.add(pattern.id);
+    matchedCategories.add(pattern.category);
+    const weight = Math.min(1, pattern.weight + nudge);
+    if (weight > maxWeight) maxWeight = weight;
+  };
+
   for (const pattern of allPatterns) {
-    if (pattern.pattern.test(normalized)) {
-      matchedPatterns.push(pattern.id);
-      matchedIds.add(pattern.id);
-      matchedCategories.add(pattern.category);
-      if (pattern.weight > maxWeight) maxWeight = pattern.weight;
+    if (pattern.pattern.test(normalized)) record(pattern, "", 0);
+  }
+
+  // Normalisation strips exactly what the obfuscation-category patterns look
+  // for (format chars, bidi controls, combining marks; NFKC also folds
+  // fullwidth letters and exotic spaces to ASCII), so those patterns also see
+  // the raw input. A direct detection — same id and weight as a normalised hit.
+  if (normalized !== input) {
+    for (const pattern of allPatterns) {
+      if (pattern.category !== "obfuscation" || matchedIds.has(pattern.id)) continue;
+      if (pattern.pattern.test(input)) record(pattern, "", 0);
     }
   }
 
@@ -246,13 +313,7 @@ export function detectInjection(
   for (const { suffix, text } of variants) {
     for (const pattern of allPatterns) {
       if (matchedIds.has(pattern.id)) continue;
-      if (pattern.pattern.test(text)) {
-        matchedPatterns.push(pattern.id + suffix);
-        matchedIds.add(pattern.id);
-        matchedCategories.add(pattern.category);
-        const weight = Math.min(1, pattern.weight + 0.1);
-        if (weight > maxWeight) maxWeight = weight;
-      }
+      if (pattern.pattern.test(text)) record(pattern, suffix, 0.1);
     }
   }
 
@@ -328,24 +389,6 @@ export function createInjectionGuard(config?: InjectionDetectorConfig & {
     enabled: true,
     stage: "preprocess" as const,
   };
-}
-
-/** Extract all string values from a nested object. */
-function extractStrings(obj: Record<string, unknown>): string[] {
-  const strings: string[] = [];
-  function walk(value: unknown): void {
-    if (typeof value === "string") strings.push(value);
-    else if (Array.isArray(value)) value.forEach(walk);
-    else if (value !== null && typeof value === "object") {
-      Object.values(value as Record<string, unknown>).forEach(walk);
-    }
-  }
-  walk(obj);
-  // Also test concatenation of all fields to catch cross-field injection splitting
-  if (strings.length > 1) {
-    strings.push(strings.join(" "));
-  }
-  return strings;
 }
 
 /** Get all built-in injection patterns. */

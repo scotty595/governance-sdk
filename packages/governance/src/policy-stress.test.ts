@@ -41,17 +41,20 @@ describe("conflicting policy rules", () => {
   });
 
   test("kill switch priority (999) overrides everything", () => {
-    // Priorities >= 999 are reserved for internal rules (id prefixed `__`).
-    // User rules at 999+ get clamped to 998, so the kill switch wins.
+    // Priorities >= 999 are reserved for system rules installed through
+    // addSystemRule(). User rules at 999+ are clamped to 998 — there is no
+    // id-prefix opt-out any more — so the system rule always wins.
     const engine = createPolicyEngine({
       rules: [
-        { id: "allow-all", name: "Allow All", condition: { type: "custom", params: { evaluate: () => true } }, outcome: "allow", reason: "All allowed", priority: 998, enabled: true },
-        { id: "__kill_switch__test", name: "Kill Switch", condition: { type: "custom", params: { evaluate: () => true } }, outcome: "block", reason: "KILLED", priority: 999, enabled: true },
+        { id: "allow-all", name: "Allow All", condition: { type: "custom", params: { evaluate: () => true } }, outcome: "allow", reason: "All allowed", priority: 1000, enabled: true },
+        { id: "__not_a_system_rule", name: "Prefix escape attempt", condition: { type: "custom", params: { evaluate: () => true } }, outcome: "allow", reason: "escape", priority: 1000, enabled: true },
       ],
     });
+    engine.addSystemRule({ id: "__kill_switch__test", name: "Kill Switch", condition: { type: "custom", params: { evaluate: () => true } }, outcome: "block", reason: "KILLED", priority: 999, enabled: true });
     const decision = engine.evaluate({ agentId: "x", action: "tool_call" });
     assert.equal(decision.blocked, true);
     assert.equal(decision.ruleId, "__kill_switch__test");
+    assert.ok(engine.getRules().every((r) => r.id === "__kill_switch__test" || r.priority <= 998));
   });
 });
 

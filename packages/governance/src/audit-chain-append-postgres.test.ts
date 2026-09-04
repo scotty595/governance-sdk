@@ -85,6 +85,12 @@ function createTxnPool(opts: { clientLog?: string[] } = {}): PgPoolLike {
     if (t.startsWith("SELECT") && t.includes("integrity_sequence IS NOT NULL")) {
       return headFor((values?.[0] as string) ?? null) as { rows: never[]; rowCount: number };
     }
+    // getAuditIntegrityBatch(ids): SELECT id, integrity_* ... WHERE id = ANY($1::text[])
+    if (t.startsWith("SELECT id, integrity_hash")) {
+      const ids = new Set((values?.[0] as string[]) ?? []);
+      const out = rows.filter((r) => ids.has(r.id));
+      return { rows: out, rowCount: out.length } as unknown as { rows: never[]; rowCount: number };
+    }
     // getAuditIntegrity(eventId): SELECT integrity_* ... WHERE id = $1
     if (t.startsWith("SELECT integrity_hash")) {
       const row = rows.find((r) => r.id === values?.[0]);

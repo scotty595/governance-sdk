@@ -494,13 +494,17 @@ describe("decision metadata", () => {
 });
 
 describe("mask outcome", () => {
-  test("mask outcome is non-blocking", () => {
+  test("mask outcome is non-blocking when redacted text can be produced", () => {
     const engine = createPolicyEngine({
-      rules: [makeRule({ outcome: "mask" })],
+      rules: [makeRule({
+        condition: { type: "blocklist", params: { terms: ["danger"] } },
+        outcome: "mask",
+      })],
     });
-    const d = engine.evaluate(makeCtx({ tool: "danger" }));
+    const d = engine.evaluate(makeCtx({ tool: "x", input: { message: "this is danger" } }));
     assert.equal(d.blocked, false);
     assert.equal(d.outcome, "mask");
+    assert.ok(d.maskedText !== undefined && !d.maskedText.includes("danger"));
   });
 
   test("mask populates maskedText for sensitive_data_filter", () => {
@@ -541,7 +545,9 @@ describe("mask outcome", () => {
     assert.ok(!d.maskedText!.includes("123-45-6789"), "SSN should be redacted");
   });
 
-  test("mask does not populate maskedText when no text available", () => {
+  test("mask degrades to block when there is nothing the engine knows how to redact", () => {
+    // Previously this returned outcome "mask" with maskedText undefined and
+    // adapters passed the original text through — a silent fail-open.
     const engine = createPolicyEngine({
       rules: [makeRule({
         condition: { type: "tool_blocked", params: { tools: ["danger"] } },
@@ -549,8 +555,10 @@ describe("mask outcome", () => {
       })],
     });
     const d = engine.evaluate(makeCtx({ tool: "danger" }));
-    assert.equal(d.outcome, "mask");
-    // maskedText may be undefined when there's no text to mask
+    assert.equal(d.outcome, "block");
+    assert.equal(d.blocked, true);
+    assert.equal(d.degradedFrom, "mask");
+    assert.equal(d.maskedText, undefined);
   });
 
   test("block outcome takes priority over mask at same level", () => {

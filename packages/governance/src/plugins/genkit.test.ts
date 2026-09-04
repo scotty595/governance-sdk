@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { createGovernance, blockTools } from "../index";
+import { createGovernance, blockTools, requireLevel } from "../index";
 import {
   governGenkitTools,
   governGenkitFlow,
@@ -229,5 +229,38 @@ describe("governGenkitFlow", () => {
     const events = await gov.audit.query({ agentId: result.agentId });
     const failures = events.filter((e) => e.outcome === "failure");
     assert.ok(failures.length > 0);
+  });
+});
+
+// ─── Agent level + stable id ────────────────────────────────
+
+describe("governGenkitTools — agent level + stable id", () => {
+  test("carries the registered level into enforcement so requireLevel(1) allows a scored agent", async () => {
+    const gov = createGovernance({ rules: [requireLevel(1)] });
+    const result = await governGenkitTools(gov, [createMockTool("search", "found")], {
+      agentName: "scored-genkit",
+      owner: "ai-team",
+      hasAuth: true,
+      hasGuardrails: true,
+      hasObservability: true,
+    });
+
+    assert.ok(result.level >= 1, `expected level >= 1, got ${result.level}`);
+    assert.equal(await result.tools[0].call({}), "found");
+    assert.equal((await result.enforce("search")).blocked, false);
+  });
+
+  test("forwards a stable agentId to register so restarts reuse the agent row", async () => {
+    const gov = createGovernance();
+    const config = { agentId: "genkit-stable-id", agentName: "genkit-agent", owner: "ai-team" };
+
+    const first = await governGenkitTools(gov, [createMockTool("search")], config);
+    const second = await governGenkitTools(gov, [createMockTool("search")], config);
+    const flow = await governGenkitFlow(gov, createMockFlow("flow"), config);
+
+    assert.equal(first.agentId, "genkit-stable-id");
+    assert.equal(second.agentId, "genkit-stable-id");
+    assert.equal(flow.agentId, "genkit-stable-id");
+    assert.equal((await gov.storage.listAgents()).length, 1);
   });
 });

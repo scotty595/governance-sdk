@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { createGovernance, blockTools } from "../index";
+import { createGovernance, blockTools, requireLevel } from "../index";
 import {
   createGovernedBedrock,
   GovernanceBlockedError,
@@ -337,5 +337,37 @@ describe("bedrock entry-gate pre/post", () => {
     });
     const text = await result.scanOutput("contains SECRET payload");
     assert.equal(text, "contains SECRET payload");
+  });
+});
+
+// ─── Agent level + stable id ────────────────────────────────
+
+describe("createGovernedBedrock — agent level + stable id", () => {
+  test("carries the registered level into enforcement so requireLevel(1) allows a scored agent", async () => {
+    const gov = createGovernance({ rules: [requireLevel(1)] });
+    const result = await createGovernedBedrock(gov, mockInvokeHandler(), {
+      agentName: "scored-bedrock",
+      owner: "cloud-team",
+      hasAuth: true,
+      hasGuardrails: true,
+      hasObservability: true,
+    });
+
+    assert.ok(result.level >= 1, `expected level >= 1, got ${result.level}`);
+    const decision = await result.guardToolUse({ toolUseId: "t1", name: "search", input: {} });
+    assert.equal(decision.blocked, false);
+    assert.equal((await result.enforce("search")).blocked, false);
+  });
+
+  test("forwards a stable agentId to register so restarts reuse the agent row", async () => {
+    const gov = createGovernance();
+    const config = { agentId: "bedrock-stable-id", agentName: "bedrock-agent", owner: "cloud-team" };
+
+    const first = await createGovernedBedrock(gov, mockInvokeHandler(), config);
+    const second = await createGovernedBedrock(gov, mockInvokeHandler(), config);
+
+    assert.equal(first.agentId, "bedrock-stable-id");
+    assert.equal(second.agentId, "bedrock-stable-id");
+    assert.equal((await gov.storage.listAgents()).length, 1);
   });
 });

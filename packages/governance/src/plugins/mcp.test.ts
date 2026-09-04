@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { createGovernance, blockTools, tokenBudget } from "../index";
+import { createGovernance, blockTools, tokenBudget, requireLevel } from "../index";
 import {
   createGovernedMCP,
   GovernanceBlockedError,
@@ -368,5 +368,40 @@ describe("MCP input injection pre-scan", () => {
       })),
       GovernanceBlockedError,
     );
+  });
+});
+
+// ─── Agent level + stable id ────────────────────────────────
+
+describe("createGovernedMCP — agent level + stable id", () => {
+  test("carries the registered level into enforcement so requireLevel(1) allows a scored agent", async () => {
+    const gov = createGovernance({ rules: [requireLevel(1)] });
+    const result = await createGovernedMCP(gov, mockToolCallHandler(), {
+      agentName: "scored-mcp",
+      owner: "platform-team",
+      hasAuth: true,
+      hasGuardrails: true,
+      hasObservability: true,
+    }, mockResourceReadHandler());
+
+    assert.ok(result.level >= 1, `expected level >= 1, got ${result.level}`);
+    const output = await result.handleToolCall(makeToolCallRequest("search", {}));
+    assert.deepEqual(output.content, [{ type: "text", text: "Result from search" }]);
+    // Resource reads build their own context — they must carry the level too.
+    const content = await result.handleResourceRead(makeResourceRequest("file:///notes.txt"));
+    assert.equal(content.length, 1);
+    assert.equal((await result.enforce("search")).blocked, false);
+  });
+
+  test("forwards a stable agentId to register so restarts reuse the agent row", async () => {
+    const gov = createGovernance();
+    const config = { agentId: "mcp-stable-id", agentName: "mcp-server", owner: "platform-team" };
+
+    const first = await createGovernedMCP(gov, mockToolCallHandler(), config);
+    const second = await createGovernedMCP(gov, mockToolCallHandler(), config);
+
+    assert.equal(first.agentId, "mcp-stable-id");
+    assert.equal(second.agentId, "mcp-stable-id");
+    assert.equal((await gov.storage.listAgents()).length, 1);
   });
 });

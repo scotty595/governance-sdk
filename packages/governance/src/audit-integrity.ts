@@ -66,19 +66,34 @@ export interface IntegrityAudit {
 // ─── HMAC-SHA256 Implementation ─────────────────────────────
 // Uses Web Crypto API (available in Node 18+ and all modern browsers)
 
-export async function hmacSha256(key: string, data: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const keyData = encoder.encode(key);
-  const msgData = encoder.encode(data);
+// Imported HMAC keys are cached (bounded, keyed by the secret string that is
+// already resident in the caller's config). Re-importing on every event cost
+// ~35 µs of the ~90 µs chained-enforce path.
+const HMAC_KEY_CACHE_MAX = 32;
+const hmacKeyCache = new Map<string, Promise<CryptoKey>>();
 
-  const cryptoKey = await crypto.subtle.importKey(
+function importHmacKey(key: string): Promise<CryptoKey> {
+  let pending = hmacKeyCache.get(key);
+  if (pending) return pending;
+  pending = crypto.subtle.importKey(
     "raw",
-    keyData,
+    new TextEncoder().encode(key),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
   );
+  if (hmacKeyCache.size >= HMAC_KEY_CACHE_MAX) {
+    const oldest = hmacKeyCache.keys().next().value;
+    if (oldest !== undefined) hmacKeyCache.delete(oldest);
+  }
+  hmacKeyCache.set(key, pending);
+  pending.catch(() => hmacKeyCache.delete(key));
+  return pending;
+}
 
+export async function hmacSha256(key: string, data: string): Promise<string> {
+  const msgData = new TextEncoder().encode(data);
+  const cryptoKey = await importHmacKey(key);
   const signature = await crypto.subtle.sign("HMAC", cryptoKey, msgData);
   const hashArray = Array.from(new Uint8Array(signature));
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");

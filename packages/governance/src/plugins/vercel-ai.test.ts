@@ -208,3 +208,34 @@ describe("createGovernedTools (Vercel AI SDK)", () => {
     assert.equal(result.tools.noExec.execute, undefined);
   });
 });
+
+// ─── Agent level + stable id ────────────────────────────────
+
+describe("createGovernedTools — agent level + stable id", () => {
+  it("carries the registered level into enforcement so requireLevel(1) allows a scored agent", async () => {
+    const gov = createGovernance({ rules: [requireLevel(1)] });
+    const result = await createGovernedTools(gov, { search: mockTool("search", async () => "found") }, {
+      agentName: "scored-vercel",
+      owner: "test-team",
+      hasAuth: true,
+      hasGuardrails: true,
+      hasObservability: true,
+    });
+
+    assert.ok(result.level >= 1, `expected level >= 1, got ${result.level}`);
+    assert.equal(await result.tools.search.execute!({}, { toolCallId: "c1", messages: [] }), "found");
+    assert.equal((await result.enforce("search")).blocked, false);
+  });
+
+  it("forwards a stable agentId to register so restarts reuse the agent row", async () => {
+    const gov = createGovernance();
+    const config = { agentId: "vercel-stable-id", agentName: "vercel-agent", owner: "test-team" };
+
+    const first = await createGovernedTools(gov, { search: mockTool("search", async () => "ok") }, config);
+    const second = await createGovernedTools(gov, { search: mockTool("search", async () => "ok") }, config);
+
+    assert.equal(first.agentId, "vercel-stable-id");
+    assert.equal(second.agentId, "vercel-stable-id");
+    assert.equal((await gov.storage.listAgents()).length, 1);
+  });
+});

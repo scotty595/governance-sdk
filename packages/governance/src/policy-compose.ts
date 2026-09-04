@@ -11,7 +11,7 @@
  * and layered policy application.
  */
 
-import type { PolicyRule, PolicyAction } from "./policy.js";
+import type { PolicyRule } from "./policy.js";
 
 // Re-export presets from separate file for <300 LOC compliance
 export { securityBaseline, complianceOverlay, platformDefaults } from "./policy-compose-presets.js";
@@ -128,7 +128,7 @@ export function composePolicies(
 
   const resolvedRules: PolicyRule[] = [];
 
-  for (const [key, entries] of rulesByConditionType) {
+  for (const entries of rulesByConditionType.values()) {
     if (entries.length === 1) {
       resolvedRules.push(entries[0].rule);
       continue;

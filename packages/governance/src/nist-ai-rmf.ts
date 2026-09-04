@@ -124,7 +124,6 @@ async function assessRequirement(
       return fail(id, "No policy rules configured", "Add policy rules with descriptive names and reasons");
     }
     case "govern-4.1": {
-      const hasStorage = true; // governance instance always has storage
       const hasPolicies = rules.length > 0;
       const hasAudit = (await governance.audit.count()) > 0;
       if (hasPolicies && hasAudit) return ok(id, "Governance operational: policies, audit, and storage configured");

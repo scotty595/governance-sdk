@@ -1,11 +1,19 @@
 /**
  * Kill Switch — instant agent shutdown for emergencies.
  *
- * Injects a priority-999 policy rule into the current governance instance
- * to block ALL actions from a killed agent. Storage is best-effort updated
- * (`status: "quarantined"`) so other instances polling storage can learn
- * about the kill — but **the authoritative kill state lives in-memory on
- * the instance where `kill()` was called**.
+ * Installs a **system rule** (priority 999, evaluated at every stage,
+ * exempt from the user-priority clamp, not removable through
+ * `gov.removeRule()`) that blocks ALL actions from a killed agent:
+ * `enforce()`, `enforcePreprocess()`, `enforceToolResult()` and
+ * `enforcePostprocess()` alike. In hosted mode the governance instance
+ * checks system rules locally BEFORE deferring to the remote API, so a
+ * kill issued in this process takes effect in this process even when
+ * decisions normally come from the server.
+ *
+ * Storage is best-effort updated (`status: "quarantined"`) so other
+ * instances polling storage can learn about the kill — but **the
+ * authoritative kill state lives in-memory on the instance where `kill()`
+ * was called**.
  *
  * Scope: **per-process**. For fleet-wide kills across multiple SDK
  * instances, either:
@@ -17,8 +25,8 @@
  *     every instance as they arrive.
  *
  * Treat the SDK-level kill switch as "last-resort local brake," not
- * "distributed emergency stop." For guaranteed fleet-wide halt, use the
- * governance-cloud API.
+ * "distributed emergency stop." For guaranteed fleet-wide halt, use a
+ * hosted governance API that holds kill state centrally.
  *
  * @example
  * ```ts
@@ -109,11 +117,21 @@ function makeFleetKillRule(reason: string): PolicyRule {
 
 /**
  * Create a kill switch bound to a governance instance.
- * Injects blocking rules at the highest priority level.
+ * Injects blocking system rules at the highest priority level.
  */
 export function createKillSwitch(gov: GovernanceInstance): KillSwitch {
   const killRecords: Map<string, KillRecord> = new Map();
   let fleetKilled = false;
+
+  // System-rule installation. `addSystemRule` is what makes the rule
+  // stage-agnostic and clamp-exempt; the fallbacks keep hand-rolled
+  // GovernanceInstance mocks working (they then get a clamped user rule).
+  const install = (rule: PolicyRule) =>
+    gov.addSystemRule ? gov.addSystemRule(rule) : gov.addRule(rule);
+  const uninstall = (ruleId: string) =>
+    gov.removeSystemRule ? gov.removeSystemRule(ruleId) : gov.removeRule(ruleId);
+  const emit = (type: "kill" | "revive", agentId: string, detail: Record<string, unknown>) =>
+    gov.events?.emit({ type, timestamp: new Date().toISOString(), agentId, detail });
 
   async function logKillEvent(
     agentId: string,
@@ -136,7 +154,7 @@ export function createKillSwitch(gov: GovernanceInstance): KillSwitch {
     killedBy?: string,
   ): Promise<KillRecord> {
     const rule = makeAgentKillRule(agentId, reason);
-    gov.addRule(rule);
+    install(rule);
 
     let storageSynced = false;
     try {
@@ -156,6 +174,7 @@ export function createKillSwitch(gov: GovernanceInstance): KillSwitch {
     killRecords.set(agentId, record);
 
     await logKillEvent(agentId, "agent_killed", reason, killedBy);
+    emit("kill", agentId, { reason, killedBy: killedBy ?? "system", scope: "agent" });
     return record;
   }
 
@@ -164,7 +183,7 @@ export function createKillSwitch(gov: GovernanceInstance): KillSwitch {
     killedBy?: string,
   ): Promise<KillRecord[]> {
     const rule = makeFleetKillRule(reason);
-    gov.addRule(rule);
+    install(rule);
     fleetKilled = true;
 
     // Kill all registered agents
@@ -192,12 +211,13 @@ export function createKillSwitch(gov: GovernanceInstance): KillSwitch {
     }
 
     await logKillEvent("__fleet__", "fleet_killed", reason, killedBy);
+    emit("kill", "__fleet__", { reason, killedBy: killedBy ?? "system", scope: "fleet", agents: records.length });
     return records;
   }
 
   async function revive(agentId: string, reason?: string): Promise<void> {
     const ruleId = `${KILL_SWITCH_RULE_PREFIX}${agentId}`;
-    gov.removeRule(ruleId);
+    uninstall(ruleId);
     killRecords.delete(agentId);
 
     try {
@@ -211,16 +231,17 @@ export function createKillSwitch(gov: GovernanceInstance): KillSwitch {
       "agent_revived",
       reason ?? "Kill switch deactivated",
     );
+    emit("revive", agentId, { reason: reason ?? "Kill switch deactivated", scope: "agent" });
   }
 
   async function reviveAll(reason?: string): Promise<void> {
     // Remove fleet kill rule
-    gov.removeRule(FLEET_KILL_RULE_ID);
+    uninstall(FLEET_KILL_RULE_ID);
     fleetKilled = false;
 
     // Remove individual kill rules
     for (const agentId of killRecords.keys()) {
-      gov.removeRule(`${KILL_SWITCH_RULE_PREFIX}${agentId}`);
+      uninstall(`${KILL_SWITCH_RULE_PREFIX}${agentId}`);
       try {
         await gov.storage.updateAgent(agentId, { status: "approved" });
       } catch {
@@ -234,6 +255,7 @@ export function createKillSwitch(gov: GovernanceInstance): KillSwitch {
       "fleet_revived",
       reason ?? "Fleet kill switch deactivated",
     );
+    emit("revive", "__fleet__", { reason: reason ?? "Fleet kill switch deactivated", scope: "fleet" });
   }
 
   function isKilled(agentId: string): boolean {

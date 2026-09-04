@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { createGovernance, blockTools } from "../index";
+import { createGovernance, blockTools, requireLevel } from "../index";
 import { governMistralTools, GovernanceBlockedError } from "./mistral";
 import type { MistralToolExecutor, MistralToolCall } from "./mistral";
 
@@ -254,5 +254,36 @@ describe("handleToolCall", () => {
     const response = await result.handleToolCall(toolCall);
     assert.ok(response.toolCallId.startsWith("call_search_"));
     assert.equal(response.content, "found it");
+  });
+});
+
+// ─── Agent level + stable id ────────────────────────────────
+
+describe("governMistralTools — agent level + stable id", () => {
+  test("carries the registered level into enforcement so requireLevel(1) allows a scored agent", async () => {
+    const gov = createGovernance({ rules: [requireLevel(1)] });
+    const result = await governMistralTools(gov, [createMockTool("search", "found")], {
+      agentName: "scored-mistral",
+      owner: "test-team",
+      hasAuth: true,
+      hasGuardrails: true,
+      hasObservability: true,
+    });
+
+    assert.ok(result.level >= 1, `expected level >= 1, got ${result.level}`);
+    assert.equal(await result.tools[0].execute({ query: "hello" }), "found");
+    assert.equal((await result.enforce("search")).blocked, false);
+  });
+
+  test("forwards a stable agentId to register so restarts reuse the agent row", async () => {
+    const gov = createGovernance();
+    const config = { agentId: "mistral-stable-id", agentName: "mistral-agent", owner: "test-team" };
+
+    const first = await governMistralTools(gov, [createMockTool("search")], config);
+    const second = await governMistralTools(gov, [createMockTool("search")], config);
+
+    assert.equal(first.agentId, "mistral-stable-id");
+    assert.equal(second.agentId, "mistral-stable-id");
+    assert.equal((await gov.storage.listAgents()).length, 1);
   });
 });

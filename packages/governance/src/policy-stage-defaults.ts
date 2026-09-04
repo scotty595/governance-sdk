@@ -28,6 +28,8 @@ const STAGE_MAP: Record<string, PolicyStage> = {
   scope_boundary: "process",
   cost_budget: "process",
   concurrent_limit: "process",
+  action_tier: "process",
+  tainted_input: "process",
 
   // Tool result — run after a tool returns, before the LLM ingests the result
   // on the next turn. This is where injection scanning of external content

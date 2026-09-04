@@ -145,6 +145,15 @@ export interface BedrockToolConfiguration {
 // ─── Configuration ──────────────────────────────────────────
 
 export interface GovernBedrockConfig {
+  /**
+   * Optional stable agent id, forwarded to `gov.register({ id })`. Pass the
+   * same value on every process start so registration re-binds to the
+   * existing agent row in durable storage instead of creating a new one.
+   * Omit to let the SDK mint a fresh UUID on each registration.
+   * This is the governance-sdk agent id — not the Bedrock `agentId` you
+   * pass to `invokeAgent`.
+   */
+  agentId?: string;
   agentName: string;
   owner: string;
   framework?: AgentFramework;

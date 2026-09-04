@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { createGovernance, blockTools, requireApproval, tokenBudget } from "../index";
+import { createGovernance, blockTools, requireApproval, tokenBudget, requireLevel } from "../index";
 import {
   governAgent,
   governTools,
@@ -397,5 +397,46 @@ describe("governTools (OpenAI)", () => {
     const events = await gov.audit.query({ agentId: result.agentId });
     const toolEvents = events.filter((e) => e.eventType === "tool_call");
     assert.equal(toolEvents.length, 2);
+  });
+});
+
+// ─── Agent level + stable id ────────────────────────────────
+
+describe("OpenAI Agents — agent level + stable id", () => {
+  test("carries the registered level into enforcement so requireLevel(1) allows a scored agent", async () => {
+    const gov = createGovernance({ rules: [requireLevel(1)] });
+    const result = await governTools(gov, [createMockTool("search", "found")], {
+      agentName: "scored-openai",
+      owner: "test-team",
+      hasAuth: true,
+      hasGuardrails: true,
+      hasObservability: true,
+    });
+
+    assert.ok(result.level >= 1, `expected level >= 1, got ${result.level}`);
+    assert.equal(await result.tools[0].execute!({ query: "hello" }), "found");
+
+    const viaAgent = await governAgent(gov, createMockAgent("scored-agent", [createMockTool("search", "found")]), {
+      agentName: "scored-openai-agent",
+      owner: "test-team",
+      hasAuth: true,
+      hasGuardrails: true,
+      hasObservability: true,
+    });
+    assert.equal((await viaAgent.enforce("search")).blocked, false);
+  });
+
+  test("forwards a stable agentId to register so restarts reuse the agent row", async () => {
+    const gov = createGovernance();
+    const config = { agentId: "openai-stable-id", agentName: "openai-agent", owner: "test-team" };
+
+    const first = await governTools(gov, [createMockTool("search")], config);
+    const second = await governTools(gov, [createMockTool("search")], config);
+    const viaAgent = await governAgent(gov, createMockAgent("agent", [createMockTool("search")]), config);
+
+    assert.equal(first.agentId, "openai-stable-id");
+    assert.equal(second.agentId, "openai-stable-id");
+    assert.equal(viaAgent.agentId, "openai-stable-id");
+    assert.equal((await gov.storage.listAgents()).length, 1);
   });
 });

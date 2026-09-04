@@ -29,7 +29,7 @@ does *around* one.
 ## Hosted mode
 
 Hosted mode needs a server that implements the governance REST API the SDK's
-remote enforcer expects (see `packages/governance/src/remote-enforce.ts`).
+remote enforcer expects (documented in [`docs/remote-contract.md`](../../docs/remote-contract.md)).
 [Lua Governance Cloud](https://heygovernance.ai) is one such implementation
 and is a separate commercial product, not part of this repository. Paste its
 URL and an API key into the **Configure** tab to use it.
