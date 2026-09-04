@@ -201,6 +201,14 @@
     "./token-types": {
       "types": "./dist/token-types.d.ts",
       "import": "./dist/token-types.js"
+    },
+    "./conformance/agent-hooks": {
+      "types": "./dist/conformance/agent-hooks.d.ts",
+      "import": "./dist/conformance/agent-hooks.js"
+    },
+    "./plugin": {
+      "types": "./dist/plugin.d.ts",
+      "import": "./dist/plugin.js"
     }
   },
   "files": [

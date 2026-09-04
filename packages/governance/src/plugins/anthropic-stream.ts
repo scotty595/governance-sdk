@@ -23,6 +23,7 @@
 import type { GovernanceInstance } from "../index";
 import type { OutcomeCallbacks } from "./outcome-handler.js";
 import { enforcePreprocess } from "./pre-post-enforce.js";
+import { extractLastText, replaceLastText } from "./text-extract.js";
 import { enforcePostprocessStream } from "./pre-post-stream.js";
 import type { StreamMode } from "./pre-post-stream.js";
 
@@ -96,7 +97,7 @@ async function* wrapGovernedAnthropicStream(
 
   let workingParams = params;
   if (runPre) {
-    const userText = extractLastUserText(params.messages);
+    const userText = extractLastText(params.messages);
     if (userText) {
       const pre = await enforcePreprocess(governance, userText, {
         agentId: config.agentId,
@@ -110,7 +111,7 @@ async function* wrapGovernedAnthropicStream(
       if (pre.text !== userText) {
         workingParams = {
           ...params,
-          messages: replaceLastUserText(params.messages, pre.text),
+          messages: replaceLastText(params.messages, pre.text),
         };
       }
     }
@@ -206,61 +207,4 @@ function isTextDelta(ev: AnthropicStreamEvent): boolean {
 
 async function* iterateArray<T>(arr: T[]): AsyncIterable<T> {
   for (const x of arr) yield x;
-}
-
-function extractLastUserText(
-  messages: AnthropicStreamParams["messages"],
-): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role !== "user") continue;
-    return contentToText(msg.content);
-  }
-  return "";
-}
-
-function contentToText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") return part;
-        if (part && typeof part === "object" && "type" in part) {
-          const p = part as { type: string; text?: string };
-          if (p.type === "text") return p.text ?? "";
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-  return "";
-}
-
-function replaceLastUserText(
-  messages: AnthropicStreamParams["messages"],
-  newText: string,
-): AnthropicStreamParams["messages"] {
-  const next = messages.map((m) => ({ ...m }));
-  for (let i = next.length - 1; i >= 0; i--) {
-    if (next[i].role !== "user") continue;
-    const msg = next[i];
-    if (typeof msg.content === "string") {
-      msg.content = newText;
-    } else if (Array.isArray(msg.content)) {
-      const parts = (msg.content as unknown[]).map((p) => {
-        if (p && typeof p === "object" && "type" in p && (p as { type: string }).type === "text") {
-          return { ...(p as object), text: newText };
-        }
-        return p;
-      });
-      const hasText = parts.some(
-        (p) => p && typeof p === "object" && "type" in p && (p as { type: string }).type === "text",
-      );
-      if (!hasText) parts.push({ type: "text", text: newText });
-      msg.content = parts;
-    }
-    break;
-  }
-  return next;
 }

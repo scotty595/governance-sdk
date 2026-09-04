@@ -33,6 +33,7 @@
 import type { GovernanceInstance } from "../index";
 import type { OutcomeCallbacks } from "./outcome-handler.js";
 import { enforcePreprocess, enforcePostprocess } from "./pre-post-enforce.js";
+import { extractLastText, partsToText, replaceLastText } from "./text-extract.js";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -95,7 +96,7 @@ export function createGovernedMessages(
       let workingParams = params;
 
       if (runPre) {
-        const text = extractLastUserText(params.messages);
+        const text = extractLastText(params.messages);
         if (text) {
           const pre = await enforcePreprocess(governance, text, {
             agentId: config.agentId,
@@ -109,7 +110,7 @@ export function createGovernedMessages(
           if (pre.text !== text) {
             workingParams = {
               ...params,
-              messages: replaceLastUserText(params.messages, pre.text),
+              messages: replaceLastText(params.messages, pre.text),
             };
           }
         }
@@ -139,70 +140,12 @@ export function createGovernedMessages(
 }
 
 // ─── Helpers ────────────────────────────────────────────────────
-
-function extractLastUserText(
-  messages: AnthropicMessagesCreateParams["messages"],
-): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role !== "user") continue;
-    return contentToText(msg.content);
-  }
-  return "";
-}
-
-function contentToText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") return part;
-        if (part && typeof part === "object" && "type" in part) {
-          const p = part as { type: string; text?: string };
-          if (p.type === "text") return p.text ?? "";
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-  return "";
-}
-
-function replaceLastUserText(
-  messages: AnthropicMessagesCreateParams["messages"],
-  newText: string,
-): AnthropicMessagesCreateParams["messages"] {
-  const next = messages.map((m) => ({ ...m }));
-  for (let i = next.length - 1; i >= 0; i--) {
-    if (next[i].role !== "user") continue;
-    const msg = next[i];
-    if (typeof msg.content === "string") {
-      msg.content = newText;
-    } else if (Array.isArray(msg.content)) {
-      const parts = (msg.content as unknown[]).map((p) => {
-        if (p && typeof p === "object" && "type" in p && (p as { type: string }).type === "text") {
-          return { ...(p as object), text: newText };
-        }
-        return p;
-      });
-      const hasText = parts.some(
-        (p) => p && typeof p === "object" && "type" in p && (p as { type: string }).type === "text",
-      );
-      if (!hasText) parts.push({ type: "text", text: newText });
-      msg.content = parts;
-    }
-    break;
-  }
-  return next;
-}
+// Message text extraction and shape-preserving replacement live in
+// text-extract.ts; only the assistant-response shape is Anthropic's own.
 
 function extractAssistantText(message: AnthropicMessage): string {
   if (!Array.isArray(message.content)) return "";
-  return message.content
-    .filter((p) => p.type === "text" && typeof p.text === "string")
-    .map((p) => p.text as string)
-    .join("\n");
+  return partsToText(message.content);
 }
 
 function replaceAssistantText(
@@ -210,11 +153,10 @@ function replaceAssistantText(
   newText: string,
 ): AnthropicMessage {
   if (!Array.isArray(message.content)) return message;
-  const content = message.content.map((p) =>
-    p.type === "text" ? { ...p, text: newText } : p,
+  const [replaced] = replaceLastText(
+    [{ role: "assistant", content: message.content }],
+    newText,
+    "assistant",
   );
-  if (!content.some((p) => p.type === "text")) {
-    content.push({ type: "text", text: newText });
-  }
-  return { ...message, content };
+  return { ...message, content: replaced.content as AnthropicMessage["content"] };
 }
