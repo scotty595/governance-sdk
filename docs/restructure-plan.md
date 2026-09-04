@@ -92,8 +92,8 @@ export), `scoring-hooks.ts` (the behavioural re-score), `fail-modes.ts`.
   path. Deprecate for two minors, then remove.
 - `mcp-call-recorder` and `mcp-chain-audit` as separate exports: fold into
   one MCP plugin.
-- `token-types` (Lua-internal JWT shapes) and `scanner-plugins` as public
-  subpaths: internal.
+- `token-types` (the JWT shapes of one Lua-internal product, never used by
+  the SDK): remove outright. `scanner-plugins` as a public subpath: internal.
 - `agent-identity` (HMAC): already deprecated; removal at the split's second
   minor.
 - `injection-benchmark` as a production export: moves to `research/`.
@@ -337,7 +337,8 @@ consumer asked for them:
 |---|---|---|
 | `governance-sdk/plugins/mastra` (middleware) | split | split + 2 minors |
 | `governance-sdk/agent-identity` (HMAC) | now (0.22) | split + 2 minors |
-| `governance-sdk/token-types`, `scanner-plugins` subpaths | split | split + 2 minors |
+| `governance-sdk/token-types` | — | removed in phase C: Lua-internal and unused; `identity-jwt` verifies that token format if anyone needs it |
+| `governance-sdk/scanner-plugins` subpath | split | split + 2 minors |
 | `governance-sdk/injection-benchmark` | split | split + 1 minor (moves to `research/`) |
 | `mlInjectionScore` alias | now (0.22) | 1.0 |
 | Every `governance-sdk/*` subpath (meta-package) | split | not before 1.0; re-exports stay |

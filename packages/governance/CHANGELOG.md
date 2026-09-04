@@ -83,7 +83,17 @@ accommodate the move. See `docs/restructure-plan.md`.
   through an open interface the registering plugin augments by declaration
   merging, so importing the identity plugin is what makes
   `getVerifier("identity")` typed. The kernel never imports a plugin's types.
-- Eight new subpaths, 61 export paths in total. 2,099 tests.
+- Eight new subpaths, 60 export paths in total after the removal below. 2,099 tests.
+
+### Removed
+
+- **`governance-sdk/token-types`.** The Propolis → Honeycomb JWT shapes were
+  the internal contract of one Lua product, never used by the SDK, never
+  tested, and never an SDK concern; they are removed outright rather than
+  deprecated. Anyone who needs that token verified has it already: it is an
+  RS256 JWT with the agent id in `sub`, so `verifyJwt(token, {
+  capabilitiesClaim: "allowedTools", expectedIssuer, expectedAudience })` from
+  `governance-sdk/identity-jwt` covers it with the issuer's public key.
 
 ### Added
 

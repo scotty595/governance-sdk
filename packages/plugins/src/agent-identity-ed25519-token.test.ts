@@ -257,10 +257,10 @@ describe("verifyAgentIdentity — key pinning and rotation", () => {
 describe("verifyAgentIdentity — audience and issuer", () => {
   it("accepts matching aud and iss", async () => {
     const keys = await identity.generateKeyPair();
-    const token = await signAgentIdentity({ agentId: "x", keys, aud: "orders-api", iss: "propolis" });
+    const token = await signAgentIdentity({ agentId: "x", keys, aud: "orders-api", iss: "idp.example" });
     assert.equal(token.payload.aud, "orders-api");
-    assert.equal(token.payload.iss, "propolis");
-    const result = await verifyAgentIdentity(token, { expectedAudience: "orders-api", expectedIssuer: "propolis" });
+    assert.equal(token.payload.iss, "idp.example");
+    const result = await verifyAgentIdentity(token, { expectedAudience: "orders-api", expectedIssuer: "idp.example" });
     assert.equal(result.valid, true);
   });
 
@@ -298,19 +298,19 @@ describe("verifyAgentIdentity — audience and issuer", () => {
 
   it("rejects issuer mismatch and missing issuer", async () => {
     const keys = await identity.generateKeyPair();
-    const signed = await signAgentIdentity({ agentId: "x", keys, iss: "propolis" });
+    const signed = await signAgentIdentity({ agentId: "x", keys, iss: "idp.example" });
     assert.equal((await verifyAgentIdentity(signed, { expectedIssuer: "someone-else" })).reason, "Issuer mismatch");
 
     const unsigned = await signAgentIdentity({ agentId: "x", keys });
-    assert.equal((await verifyAgentIdentity(unsigned, { expectedIssuer: "propolis" })).reason, "Issuer missing");
+    assert.equal((await verifyAgentIdentity(unsigned, { expectedIssuer: "idp.example" })).reason, "Issuer missing");
   });
 
   it("aud and iss are covered by the signature — rewriting them fails verification", async () => {
     const keys = await identity.generateKeyPair();
-    const token = await signAgentIdentity({ agentId: "x", keys, aud: "billing", iss: "propolis" });
+    const token = await signAgentIdentity({ agentId: "x", keys, aud: "billing", iss: "idp.example" });
 
     const reAudienced = { ...token, payload: { ...token.payload, aud: "orders-api" } };
-    const r1 = await verifyAgentIdentity(reAudienced, { expectedAudience: "orders-api", expectedIssuer: "propolis" });
+    const r1 = await verifyAgentIdentity(reAudienced, { expectedAudience: "orders-api", expectedIssuer: "idp.example" });
     assert.equal(r1.reason, "Invalid signature");
 
     const reIssued = { ...token, payload: { ...token.payload, iss: "evil" } };

@@ -1215,7 +1215,6 @@ governance-sdk/otel-hooks                  governance-prefixed span shape (passi
 
 # Scanner + type surface
 governance-sdk/scanner-plugins             scanner plugin interface
-governance-sdk/token-types                 token type guards
 
 # Framework integrations (10 featured + 2 agent runtimes + MCP toolkit + Bedrock)
 governance-sdk/plugins/claude-agent         # canUseTool + PreToolUse/PostToolUse hooks
@@ -1245,7 +1244,7 @@ top-level package export — `import { runWithOutcome } from 'governance-sdk'`.
 
 - **0** runtime dependencies
 - **2,099** tests, 0 failures (`npm test`)
-- **61** export paths — tree-shakeable, import only what you use
+- **60** export paths — tree-shakeable, import only what you use
 - **TypeScript strict mode**, no `any` types in source
 - **MIT licensed**
 
