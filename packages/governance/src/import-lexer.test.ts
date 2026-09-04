@@ -207,3 +207,41 @@ describe("extractToolImports", () => {
     assert.ok(specs.includes("@org/core"));
   });
 });
+
+
+describe("import lexer — string scanning at the source bounds", () => {
+  // `stripCommentsAndStrings` walks `source[i]` a character at a time and
+  // looks one ahead for escapes. These are the inputs where that look-ahead
+  // runs off the end of the file.
+
+  it("keeps an escaped quote inside a string from ending the string early", () => {
+    const out = parseImports(`const s = "a \\" import evil from \\"nope\\"";\nimport Real from "pkg";`);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].specifier, "pkg");
+    assert.equal(out[0].defaultName, "Real");
+  });
+
+  it("does not read past the end on a source ending in a backslash inside a string", () => {
+    const out = parseImports(`import Real from "pkg";\nconst s = "trailing \\`);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].specifier, "pkg");
+  });
+
+  it("does not read past the end on an unterminated string, template or comment", () => {
+    assert.deepEqual(parseImports(`const s = "unterminated`), []);
+    assert.deepEqual(parseImports("const t = `unterminated"), []);
+    assert.deepEqual(parseImports(`/* unterminated import X from "pkg"`), []);
+    assert.deepEqual(parseImports(""), []);
+  });
+
+  it("ignores an import that only appears inside a comment or string", () => {
+    const source = [
+      `// import Fake from "fake-a";`,
+      `/* import Fake from "fake-b"; */`,
+      "const s = `import Fake from \"fake-c\";`;",
+      `import Real from "pkg";`,
+    ].join("\n");
+    const specs = parseImports(source).map((i) => i.specifier);
+    assert.deepEqual(specs, ["pkg"]);
+  });
+});

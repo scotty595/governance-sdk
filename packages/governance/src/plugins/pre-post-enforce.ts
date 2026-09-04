@@ -54,6 +54,17 @@ export interface PrePostEnforceOptions extends PrePostAgentIdentity {
   callbacks?: OutcomeCallbacks;
   /** Override the sentinel tool name used for callbacks/logging. */
   toolName?: string;
+  /**
+   * A context the adapter core already assembled — consequence tier, taint
+   * marks, extracted target path and URL, session token count. The text
+   * fields are overlaid on top of it.
+   *
+   * Without this, a pre/post wrapper had to build its own context, which meant
+   * a prompt scanned through `createGovernedMessages` saw a different context
+   * from a tool call on the same agent. Supplying it is how the wrappers get
+   * the same assembly every other adapter path gets.
+   */
+  context?: EnforcementContext;
 }
 
 /** Result shape shared by pre/post helpers. */
@@ -83,12 +94,16 @@ export async function enforcePreprocess(
   options: PrePostEnforceOptions,
 ): Promise<PrePostResult> {
   const ctx: EnforcementContext = {
+    ...(options.context ?? {}),
     agentId: options.agentId,
     agentName: options.agentName,
     agentLevel: options.agentLevel,
-    action: options.action ?? "message_send",
-    input: { message: inputText },
-    sessionTokensUsed: options.sessionTokensUsed,
+    action: options.action ?? options.context?.action ?? "message_send",
+    // `inputText` is the canonical field the engine masks from; `input.message`
+    // is kept for conditions that walk the input object.
+    inputText,
+    input: { ...(options.context?.input ?? {}), message: inputText },
+    sessionTokensUsed: options.sessionTokensUsed ?? options.context?.sessionTokensUsed,
     ...(options.metadata && Object.keys(options.metadata).length > 0
       ? { metadata: options.metadata }
       : {}),
@@ -128,15 +143,16 @@ export async function enforcePostprocess(
   },
 ): Promise<PrePostResult> {
   const ctx: EnforcementContext = {
+    ...(options.context ?? {}),
     agentId: options.agentId,
     agentName: options.agentName,
     agentLevel: options.agentLevel,
-    action: options.action ?? "message_send",
-    input: { message: outputText },
+    action: options.action ?? options.context?.action ?? "message_send",
+    input: { ...(options.context?.input ?? {}), message: outputText },
     outputText,
     outputTokenCount: options.outputTokenCount,
     executionDurationMs: options.executionDurationMs,
-    sessionTokensUsed: options.sessionTokensUsed,
+    sessionTokensUsed: options.sessionTokensUsed ?? options.context?.sessionTokensUsed,
     ...(options.metadata && Object.keys(options.metadata).length > 0
       ? { metadata: options.metadata }
       : {}),

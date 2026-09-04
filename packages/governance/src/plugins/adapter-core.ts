@@ -27,6 +27,11 @@ import type { AgentRegistration, AgentFramework } from "../types.js";
 import { appendTaint, type TaintMark } from "../taint.js";
 import { scanToolResult, type ScanToolResultInput, type ScanToolResultOutput } from "../tool-result-scan.js";
 import { handleOutcome, type OutcomeCallbacks } from "./outcome-handler.js";
+import {
+  enforcePreprocess as runPreprocess,
+  enforcePostprocess as runPostprocess,
+  type PrePostResult,
+} from "./pre-post-enforce.js";
 import { extractFields, type ToolFieldExtractionRegistry } from "./mastra-processor-tool-wrap.js";
 
 /**
@@ -94,6 +99,10 @@ export interface CallContext {
   outputText?: string;
   metadata?: Record<string, unknown>;
   organizationId?: string;
+  /** Output token count, for output-budget rules at the postprocess stage. */
+  outputTokenCount?: number;
+  /** Wall-clock duration, for latency rules at the postprocess stage. */
+  executionDurationMs?: number;
   /**
    * Provenance marks for this call, when the adapter tracks them at a finer
    * scope than the core's per-session list. The Mastra processor does: it
@@ -133,12 +142,29 @@ export interface AdapterCore {
    * and rethrow on failure.
    */
   run<T>(toolName: string, input: Record<string, unknown> | undefined, fn: () => Promise<T>): Promise<T>;
+  /**
+   * Scan a user prompt at the `preprocess` stage. Throws on block and
+   * require_approval, returns the text to use downstream (masked when a mask
+   * rule fired) — the same contract the pre/post wrappers have always had,
+   * but over a context the core assembled, so a prompt and a tool call on the
+   * same agent are judged against the same facts.
+   */
+  preprocess(text: string, call?: CallContext): Promise<PrePostResult>;
+  /** The same, at the `postprocess` stage, for a model's output. */
+  postprocess(text: string, call?: CallContext): Promise<PrePostResult>;
   /** Provenance marks accumulated in this adapter's session. */
   readonly taint: {
     marks(): TaintMark[];
     record(mark: TaintMark): void;
     reset(): void;
   };
+}
+
+/** Drop undefined keys so a default underneath is not overwritten by absence. */
+function stripUndefined(reg: AgentRegistration): AgentRegistration {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(reg)) if (v !== undefined) out[k] = v;
+  return out as unknown as AgentRegistration;
 }
 
 /** Build the registration payload an adapter sends to `gov.register()`. */
@@ -167,6 +193,13 @@ export interface CreateAdapterCoreOptions {
   /** Framework to record when the config does not name one. */
   framework: AgentFramework;
   /**
+   * Per-adapter registration defaults, applied under the caller's config —
+   * Bedrock treats an agent as authenticated unless told otherwise, LlamaIndex
+   * tags its runtime, OpenAI Agents falls back to the agent's instructions for
+   * a description. Anything the caller set wins.
+   */
+  registrationDefaults?: Partial<AgentRegistration>;
+  /**
    * Applied by `core.enforce()` — throwing on block and require_approval, as
    * adapters have always done. Adapters whose config is itself the callback
    * bag pass `callbacks: config`; adapters that handle outcomes themselves
@@ -186,7 +219,10 @@ export async function createAdapterCore(
   config: AdapterCoreConfig,
   opts: CreateAdapterCoreOptions,
 ): Promise<AdapterCore> {
-  const registration = buildRegistration(config, opts.tools ?? [], opts.framework);
+  const registration: AgentRegistration = {
+    ...opts.registrationDefaults,
+    ...stripUndefined(buildRegistration(config, opts.tools ?? [], opts.framework)),
+  };
   const registered = await governance.register(registration);
   return attachAdapterCore(governance, config, {
     agentId: registered.id,
@@ -231,6 +267,8 @@ export function attachAdapterCore(
       ...(call.input !== undefined ? { input: call.input } : {}),
       ...(call.inputText !== undefined ? { inputText: call.inputText } : {}),
       ...(call.outputText !== undefined ? { outputText: call.outputText } : {}),
+      ...(call.outputTokenCount !== undefined ? { outputTokenCount: call.outputTokenCount } : {}),
+      ...(call.executionDurationMs !== undefined ? { executionDurationMs: call.executionDurationMs } : {}),
       ...(fields.targetPath !== undefined ? { targetPath: fields.targetPath } : {}),
       ...(fields.targetUrl !== undefined ? { targetUrl: fields.targetUrl } : {}),
       ...(tier !== undefined ? { actionTier: tier } : {}),
@@ -290,6 +328,30 @@ export function attachAdapterCore(
     return scan;
   }
 
+  function prePostOptions(call: CallContext) {
+    return {
+      agentId,
+      agentName: config.agentName,
+      agentLevel,
+      context: context(call),
+      ...(identity.callbacks ? { callbacks: identity.callbacks } : {}),
+      ...(call.action !== undefined ? { action: call.action } : {}),
+      ...(call.metadata !== undefined ? { metadata: call.metadata } : {}),
+    };
+  }
+
+  async function preprocess(text: string, call: CallContext = {}): Promise<PrePostResult> {
+    return runPreprocess(governance, text, prePostOptions(call));
+  }
+
+  async function postprocess(text: string, call: CallContext = {}): Promise<PrePostResult> {
+    return runPostprocess(governance, text, {
+      ...prePostOptions(call),
+      ...(call.outputTokenCount !== undefined ? { outputTokenCount: call.outputTokenCount } : {}),
+      ...(call.executionDurationMs !== undefined ? { executionDurationMs: call.executionDurationMs } : {}),
+    });
+  }
+
   async function run<T>(
     toolName: string,
     input: Record<string, unknown> | undefined,
@@ -319,6 +381,8 @@ export function attachAdapterCore(
     audit,
     scanResult,
     run,
+    preprocess,
+    postprocess,
     taint: {
       marks: () => [...marks],
       record: (mark) => { if (trackTaint) marks = appendTaint(marks, mark); },

@@ -32,7 +32,15 @@ export function contentToText(content: unknown): string {
   return "";
 }
 
-/** Flatten an array of content parts to newline-joined text. */
+/**
+ * Flatten an array of content parts to newline-joined text.
+ *
+ * A part counts as text when it says so (`type: "text"`, or the
+ * `input_text` / `output_text` the OpenAI Agents SDK uses) or when it carries
+ * a `text` string and no type at all — Genkit, LlamaIndex and the OpenAI
+ * Agents SDK all emit that untagged shape, and requiring the discriminator
+ * pushed a re-tagging step into three adapters.
+ */
 export function partsToText(parts: unknown[]): string {
   const out: string[] = [];
   for (const part of parts) {
@@ -42,7 +50,9 @@ export function partsToText(parts: unknown[]): string {
     }
     if (part && typeof part === "object") {
       const p = part as { type?: unknown; text?: unknown };
-      if (p.type === "text" && typeof p.text === "string" && p.text) out.push(p.text);
+      if (typeof p.text !== "string" || p.text === "") continue;
+      const tagged = p.type === undefined || p.type === "text" || p.type === "input_text" || p.type === "output_text";
+      if (tagged) out.push(p.text);
     }
   }
   return out.join("\n");
@@ -99,9 +109,14 @@ function replaceInParts(parts: unknown[], text: string): unknown[] {
   const out = parts.map((part) => {
     if (replaced) return part;
     if (typeof part === "string") { replaced = true; return text; }
-    if (part && typeof part === "object" && (part as { type?: unknown }).type === "text") {
-      replaced = true;
-      return { ...(part as Record<string, unknown>), text };
+    if (part && typeof part === "object") {
+      const p = part as { type?: unknown; text?: unknown };
+      const isText = typeof p.text === "string"
+        && (p.type === undefined || p.type === "text" || p.type === "input_text" || p.type === "output_text");
+      if (isText) {
+        replaced = true;
+        return { ...(part as Record<string, unknown>), text };
+      }
     }
     return part;
   });

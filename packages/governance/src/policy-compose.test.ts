@@ -154,6 +154,30 @@ describe("policy deduplication", () => {
     assert.ok(tokenRule);
     assert.ok(tokenRule.id.startsWith("set2/")); // Higher priority boost
   });
+
+  test("deduplication keeps the first-collected rule when priorities tie", () => {
+    // The winner is picked by a single pass over the group rather than a sort,
+    // so pin the tie-break: sets are collected in argument order and the
+    // earliest one holds the win.
+    const set1: PolicySet = {
+      name: "set1",
+      source: "team-a",
+      priorityBoost: 10,
+      rules: [tokenBudget(100_000)],
+    };
+    const set2: PolicySet = {
+      name: "set2",
+      source: "team-b",
+      priorityBoost: 10,
+      rules: [tokenBudget(200_000)],
+    };
+
+    const result = composePolicies([set1, set2]);
+    const tokenRules = result.rules.filter((r) => r.id.includes("token-budget"));
+    assert.equal(tokenRules.length, 1);
+    assert.ok(tokenRules[0].id.startsWith("set1/"));
+    assert.equal(result.deduplicatedCount, 1);
+  });
 });
 
 // ─── Conflict Resolution ────────────────────────────────────────

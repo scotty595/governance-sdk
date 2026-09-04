@@ -6,6 +6,7 @@
  */
 
 import type { GovernanceInstance, AuditEvent } from "../index";
+import type { AdapterConfig } from "./adapter-core.js";
 import type { EnforcementDecision, PolicyAction } from "../policy";
 import type { AgentFramework } from "../types";
 
@@ -103,7 +104,7 @@ export interface AnthropicToolExecutor {
 
 // ─── Configuration ──────────────────────────────────────────
 
-export interface GovernAnthropicConfig {
+export interface GovernAnthropicConfig extends AdapterConfig {
   /**
    * Optional stable agent id, forwarded to `gov.register({ id })`. Pass the
    * same value on every process start so registration re-binds to the
