@@ -41,12 +41,19 @@ describe("scoringPlugin — install", () => {
     assert.equal(gov.plugins!()[0].version, "1.0.0");
   });
 
-  it("unuse() drops the enforcement subscription", async () => {
+  it("unuse() drops the enforcement subscription and the reports", async () => {
     const gov = createGovernance();
     await gov.use!(scoringPlugin());
     assert.equal(gov.events!.listenerCount("enforcement"), 1);
+
     await gov.unuse!("scoring/posture");
+    // The listener is the plugin's own teardown; the reporters are the
+    // kernel's, rolled back from the disposers registerReporter returned.
     assert.equal(gov.events!.listenerCount("enforcement"), 0);
+    await assert.rejects(
+      () => gov.report!("scoring/agent", { agentId: "a", registration: SALES }),
+      /No reporter registered under "scoring\/agent"/,
+    );
   });
 });
 
@@ -72,12 +79,6 @@ describe("scoringPlugin — posture reports match the direct call", () => {
       direct.assessments.map(withoutTimestamp),
     );
     assert.deepEqual(viaPlugin.summary, direct.summary);
-  });
-
-  it("a reporter called without its config says so", async () => {
-    const gov = createGovernance();
-    await gov.use!(scoringPlugin());
-    await assert.rejects(() => gov.report!("scoring/agent"), /Reporter "scoring\/agent" expects a config object/);
   });
 });
 

@@ -186,7 +186,9 @@ function satisfiesComparator(version: Parsed, comparator: string): boolean {
   const opMatch = /^(>=|<=|>|<|\^|~|=)?\s*(.+)$/.exec(c);
   if (!opMatch) return false;
   const op = opMatch[1] ?? "=";
-  const target = parseVersion(opMatch[2]);
+  const rawTarget = opMatch[2];
+  if (rawTarget === undefined) return false;
+  const target = parseVersion(rawTarget);
   if (!target) return false;
   const cmp = compare(version, target);
 
@@ -323,7 +325,7 @@ export function createPluginRegistry(
       if (!entry) return false;
       await entry.plugin.uninstall?.();
       // Reverse order: a later registration may have displaced an earlier one.
-      for (let i = entry.disposers.length - 1; i >= 0; i--) entry.disposers[i]();
+      for (const dispose of [...entry.disposers].reverse()) dispose();
       installed.delete(id);
       return true;
     },

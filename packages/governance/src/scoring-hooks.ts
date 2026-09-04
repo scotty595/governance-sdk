@@ -10,7 +10,7 @@
 
 import { assessAgent, assessFleet, getGovernanceLevel, computeCompositeScore } from "./scorer.js";
 import { computeBehavioralAdjustments, applyBehavioralAdjustments } from "./behavioral-scorer.js";
-import type { GovernanceAssessment, FleetSummary } from "./types.js";
+import type { AgentStatus, GovernanceAssessment, FleetSummary } from "./types.js";
 import type { GovernanceStorage, StoredAgent } from "./storage.js";
 import type { AgentRegistration } from "./types.js";
 
@@ -100,27 +100,32 @@ export function createScoringHooks(
     fleet.summary.fleetLevel = getGovernanceLevel(avgScore);
 
     const sorted = [...fleet.assessments].sort((a, b) => b.compositeScore - a.compositeScore);
-    fleet.summary.highestScoring = sorted[0]
-      ? { name: sorted[0].agentName, score: sorted[0].compositeScore } : null;
-    fleet.summary.lowestScoring = sorted.length > 0
-      ? { name: sorted[sorted.length - 1].agentName, score: sorted[sorted.length - 1].compositeScore } : null;
+    const highest = sorted[0];
+    const lowest = sorted[sorted.length - 1];
+    fleet.summary.highestScoring = highest
+      ? { name: highest.agentName, score: highest.compositeScore } : null;
+    fleet.summary.lowestScoring = lowest
+      ? { name: lowest.agentName, score: lowest.compositeScore } : null;
 
     // Recount by status and level
-    const byStatus: Record<string, number> = {
+    const byStatus: Record<AgentStatus, number> = {
       registered: 0, assessed: 0, approved: 0, flagged: 0, deprecated: 0, quarantined: 0,
     };
     const byLevel: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0 };
     for (const a of fleet.assessments) {
-      byStatus[a.status] = (byStatus[a.status] || 0) + 1;
+      byStatus[a.status] += 1;
       byLevel[a.level.level] = (byLevel[a.level.level] || 0) + 1;
     }
-    fleet.summary.byStatus = byStatus as typeof fleet.summary.byStatus;
+    fleet.summary.byStatus = byStatus;
     fleet.summary.byLevel = byLevel;
 
     // Update fleet recommendations
     const recs: string[] = [];
     if (byStatus.flagged > 0) recs.push(`${byStatus.flagged} agent(s) below governance threshold — review immediately`);
-    if (byLevel[0] > 0) recs.push(`${byLevel[0]} agent(s) at Level 0 (Unregistered) — complete registration`);
+    // `byLevel` is keyed by number, so it carries an index signature; level 0
+    // is seeded above, the fallback only makes that visible to the compiler.
+    const unregistered = byLevel[0] ?? 0;
+    if (unregistered > 0) recs.push(`${unregistered} agent(s) at Level 0 (Unregistered) — complete registration`);
     if (avgScore < 60) recs.push("Fleet average below 60 — prioritize governance improvements before scaling");
     fleet.summary.recommendations = recs;
 

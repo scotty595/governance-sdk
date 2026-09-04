@@ -57,7 +57,8 @@ export interface MistralToolExecutor {
  * `toolFieldExtraction` (map tool arguments onto `ctx.targetPath` /
  * `ctx.targetUrl`).
  */
-export type GovernMistralConfig = AdapterConfig;
+/* An interface rather than an alias so consumer declaration merging still works. */
+export interface GovernMistralConfig extends AdapterConfig {}
 
 // ─── Results ────────────────────────────────────────────────
 

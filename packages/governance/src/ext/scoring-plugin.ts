@@ -16,7 +16,7 @@
 
 import type { GovernancePlugin, KernelHandle } from "../plugin.js";
 import type { GovernanceEvent } from "../events.js";
-import type { AgentRegistration } from "../types.js";
+import type { AgentRegistration, FleetSummary, GovernanceAssessment } from "../types.js";
 import type { AuditEvent, AuditOutcome } from "../storage.js";
 import { POLICY_OUTCOMES } from "../policy.js";
 import { assessAgent, assessFleet } from "../scorer.js";
@@ -49,6 +49,12 @@ export interface AgentScoreConfig {
 /** Config for the `"scoring/fleet"` reporter — the arg `assessFleet` takes. */
 export interface FleetScoreConfig {
   agents: { id: string; registration: AgentRegistration }[];
+}
+
+/** What `"scoring/fleet"` returns — `assessFleet`'s result, unchanged. */
+export interface FleetReport {
+  assessments: GovernanceAssessment[];
+  summary: FleetSummary;
 }
 
 /** Config for the `"scoring/behavioral"` reporter. */
@@ -103,15 +109,6 @@ function toAuditEvent(event: GovernanceEvent, agentId: string, seq: number): Aud
   };
 }
 
-function reporterConfig<Config>(id: string, config: unknown): Config {
-  if (config === null || typeof config !== "object") {
-    throw new TypeError(
-      `Reporter "${id}" expects a config object, got ${config === null ? "null" : typeof config}`,
-    );
-  }
-  return config as Config;
-}
-
 // ─── Plugin ─────────────────────────────────────────────────────
 
 /**
@@ -140,25 +137,26 @@ export function scoringPlugin(opts: ScoringPluginOptions = {}): GovernancePlugin
     requires: { core: "^0.22.0", capabilities: ["reporters", "events"] },
 
     install(kernel: KernelHandle): void {
-      kernel.registerReporter("scoring/agent", (config) => {
-        const c = reporterConfig<AgentScoreConfig>("scoring/agent", config);
-        return assessAgent(c.agentId, c.registration);
-      });
+      // The registry records each register verb's disposer, so `gov.unuse()`
+      // rolls these back without the plugin tracking anything.
+      kernel.registerReporter<AgentScoreConfig, GovernanceAssessment>(
+        "scoring/agent", (c) => assessAgent(c.agentId, c.registration),
+      );
 
-      kernel.registerReporter("scoring/fleet", (config) => {
-        const c = reporterConfig<FleetScoreConfig>("scoring/fleet", config);
-        return assessFleet(c.agents);
-      });
+      kernel.registerReporter<FleetScoreConfig, FleetReport>(
+        "scoring/fleet", (c) => assessFleet(c.agents),
+      );
 
-      kernel.registerReporter("scoring/behavioral", (config): BehavioralAssessment => {
-        const c = reporterConfig<BehavioralScoreConfig>("scoring/behavioral", config);
-        return computeBehavioralAdjustments({
+      kernel.registerReporter<BehavioralScoreConfig, BehavioralAssessment>(
+        "scoring/behavioral", (c) => computeBehavioralAdjustments({
           events: observed.get(c.agentId) ?? [],
           declaredTools: c.declaredTools ?? [],
           config: c.config ?? opts.behavioral,
-        });
-      });
+        }),
+      );
 
+      // `events.on` is a direct subscription, not a kernel registration, so
+      // this one the plugin still has to undo itself.
       kernel.events.on("enforcement", onEnforcement);
       detach = () => kernel.events.off("enforcement", onEnforcement);
     },

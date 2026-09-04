@@ -13,14 +13,9 @@
  */
 
 import type { GovernancePlugin, KernelHandle } from "../plugin.js";
-import { getScanText } from "../policy.js";
+import { extractStrings, getScanText } from "../policy.js";
 import { maskSensitiveData } from "../mask.js";
-import {
-  detectInjection,
-  getBuiltinPatterns,
-  type InjectionCategory,
-  type InjectionPattern,
-} from "../injection-detect.js";
+import { detectInjection, type InjectionCategory, type InjectionPattern } from "../injection-detect.js";
 import { runBenchmark, type BenchmarkResults, type DetectorFn } from "../injection-benchmark.js";
 
 /**
@@ -33,30 +28,6 @@ const CORPUS_REVISION = "2026.9.0";
 
 /** Default detection threshold, matching `detectInjection`'s own default. */
 const DEFAULT_THRESHOLD = 0.5;
-
-/**
- * Category the caller's patterns are re-keyed to before they are handed to
- * `detectInjection()`.
- *
- * `InjectionDetectorConfig` has no "replace the corpus" option: BUILTIN_PATTERNS
- * is always folded in, and `skipCategories` is the only removal lever — but
- * every one of the seven categories is in use by the built-ins, so skipping
- * "all built-in categories" would drop the caller's patterns along with them.
- * Re-keying the caller's patterns to a category no built-in declares leaves
- * them as the only survivors, which is how a caller-supplied corpus reaches
- * the existing normaliser and scorer without this file copying either.
- *
- * This is a workaround for a missing option, not a design — see the plugin's
- * notes: `InjectionDetectorConfig` wants a `patterns` (replace, don't append)
- * field. One consequence today: a caller pattern declared `obfuscation` loses
- * the extra raw-input pass `detectInjection()` gives that category.
- */
-const OVERRIDE_CATEGORY = "plugin_corpus" as InjectionCategory;
-
-/** Every category the built-in corpus uses — read from the corpus, not fixed here. */
-const BUILTIN_CATEGORIES: InjectionCategory[] = [
-  ...new Set(getBuiltinPatterns().map((p) => p.category)),
-];
 
 export interface DetectPluginOptions {
   /**
@@ -76,32 +47,9 @@ export interface BenchmarkReportConfig {
 }
 
 /**
- * The same walk over `ctx.input` the built-in condition does — it lives
- * module-private in `conditions/builtins.ts`. Kept identical so the override
- * differs from the built-in in exactly one way: which patterns it matches.
- */
-function extractStrings(obj: Record<string, unknown>): string[] {
-  const out: string[] = [];
-  (function walk(v: unknown) {
-    if (typeof v === "string") out.push(v);
-    else if (Array.isArray(v)) v.forEach(walk);
-    else if (v && typeof v === "object") Object.values(v as Record<string, unknown>).forEach(walk);
-  })(obj);
-  if (out.length > 1) out.push(out.join(" "));
-  return out;
-}
-
-/** Run `detectInjection`'s scorer over `patterns` alone. See OVERRIDE_CATEGORY. */
-function scanCorpus(text: string, patterns: InjectionPattern[], threshold: number): boolean {
-  return detectInjection(text, {
-    threshold,
-    customPatterns: patterns.map((p) => ({ ...p, category: OVERRIDE_CATEGORY })),
-    skipCategories: BUILTIN_CATEGORIES,
-  }).detected;
-}
-
-/**
- * Swap the injection detector without touching the kernel.
+ * Swap the injection detector without touching the kernel. `gov.unuse()` puts
+ * the built-in `injection_guard` back — the kernel rolls each registration
+ * back through the disposer it returned.
  *
  * @example
  * ```ts
@@ -125,33 +73,32 @@ export function detectPlugin(opts: DetectPluginOptions = {}): GovernancePlugin {
       kernel.registerMaskStrategy("sensitive_data_filter", (text, params) =>
         maskSensitiveData(text, params.patterns as string[] | undefined));
 
-      kernel.registerReporter("detect/benchmark", (config): Promise<BenchmarkResults> => {
-        const detector = (config as BenchmarkReportConfig | undefined)?.detector;
-        if (typeof detector !== "function") {
-          throw new TypeError(
-            'Reporter "detect/benchmark" expects { detector }: (input: string) => DetectorResult',
-          );
-        }
-        return runBenchmark(detector);
-      });
+      kernel.registerReporter<BenchmarkReportConfig, BenchmarkResults>(
+        "detect/benchmark", (config) => runBenchmark(config.detector),
+      );
 
       if (!patterns) return;
 
+      // The built-in evaluator, with `patterns` swapped for the caller's
+      // corpus. `skipCategories` and `threshold` keep their meaning, the text
+      // it scans comes from the same `getScanText` / `extractStrings` pair the
+      // built-in uses, and `detectInjection` still does the normalising and
+      // the scoring — so the override differs in exactly one thing.
       kernel.registerCondition(
         {
           name: "injection_guard",
           description: `Detect prompt injection against a plugin-supplied corpus (${patterns.length} patterns)`,
           evaluator: (ctx, p, rule) => {
             const threshold = typeof p.threshold === "number" ? p.threshold : defaultThreshold;
-            // `skipCategories` keeps its meaning against the caller's own
-            // categories: filter before the corpus is re-keyed.
-            const skip = new Set(Array.isArray(p.skipCategories) ? p.skipCategories : []);
-            const active = skip.size > 0 ? patterns.filter((pat) => !skip.has(pat.category)) : patterns;
-            if (active.length === 0) return false;
-
+            const skip = (p.skipCategories ?? []) as InjectionCategory[];
             const strings = getScanText(ctx, rule) ?? (ctx.input ? extractStrings(ctx.input) : []);
             for (const str of strings) {
-              if (scanCorpus(str, active, threshold)) return true;
+              const result = detectInjection(str, {
+                threshold,
+                patterns,
+                skipCategories: skip.length > 0 ? skip : undefined,
+              });
+              if (result.detected) return true;
             }
             return false;
           },

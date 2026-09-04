@@ -103,6 +103,29 @@ describe("detectPlugin — swapping the corpus", () => {
     assert.equal(await guarded(gov, FRUIT_TEXT), false, "the caller's only category was skipped");
   });
 
+  it("unuse() puts the built-in corpus back", async () => {
+    const gov = createGovernance({ rules: [createInjectionGuard()] });
+    await gov.use!(detectPlugin({ patterns: FRUIT_CORPUS }));
+    assert.equal(await guarded(gov, FRUIT_TEXT), true);
+
+    await gov.unuse!("detect/regex");
+    assert.equal(await guarded(gov, CLASSIC_ATTACK), true, "the built-in condition is back");
+    assert.equal(await guarded(gov, FRUIT_TEXT), false, "the caller's corpus is gone");
+  });
+
+  it("an obfuscation-category corpus pattern still gets the raw-input pass", async () => {
+    // Normalisation strips \p{Cf}, so this only fires if the raw input is
+    // scanned too — the pass detectInjection gives the obfuscation category.
+    const zeroWidth: InjectionPattern[] = [{
+      id: "zw", category: "obfuscation", pattern: /[\u200B\u200C]{2,}/, weight: 0.9,
+      description: "Zero-width run",
+    }];
+    const gov = createGovernance({ rules: [createInjectionGuard()] });
+    await gov.use!(detectPlugin({ patterns: zeroWidth }));
+    assert.equal(await guarded(gov, "hello\u200B\u200B\u200Cworld"), true);
+    assert.equal(await guarded(gov, "hello world"), false);
+  });
+
   it("a corpus pattern below the rule's threshold does not fire", async () => {
     const weak: InjectionPattern[] = [{ ...FRUIT_CORPUS[0], weight: 0.3 }];
     const gov = createGovernance({
@@ -127,11 +150,5 @@ describe("detectPlugin — benchmark reporter", () => {
     const viaPlugin = await gov.report!<BenchmarkResults>("detect/benchmark", { detector });
     assert.deepEqual(viaPlugin, await runBenchmark(detector));
     assert.equal(viaPlugin.total, BENCHMARK_DATASET.length);
-  });
-
-  it("names what it wants when handed no detector", async () => {
-    const gov = createGovernance();
-    await gov.use!(detectPlugin());
-    await assert.rejects(() => gov.report!("detect/benchmark", {}), /expects \{ detector \}/);
   });
 });

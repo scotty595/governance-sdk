@@ -134,12 +134,16 @@ describe("standards plugins — reports match the direct call", () => {
     assert.equal(viaPlugin.standardVersion, "ISO/IEC 42001:2023");
   });
 
-  it("a reporter called without its config says so instead of throwing deep inside a mapping", async () => {
+  it("unuse() takes the reports away again", async () => {
     const gov = createGovernance();
-    await gov.use!(nistAiRmfPlugin());
+    await gov.use!(owaspAgenticPlugin());
+    await gov.unuse!("standards/owasp-asi");
     await assert.rejects(
-      () => gov.report!("standards/nist-ai-rmf"),
-      /Reporter "standards\/nist-ai-rmf" expects its assessment config object, got undefined/,
+      () => gov.report!("standards/owasp-asi", { governance: gov, agents: [] }),
+      /No reporter registered under "standards\/owasp-asi"/,
     );
+    // …and the id is free again, so a revised edition can be installed.
+    await gov.use!(owaspAgenticPlugin());
+    assert.equal(gov.plugins!().length, 1);
   });
 });

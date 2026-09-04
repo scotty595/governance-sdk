@@ -15,11 +15,15 @@
 
 import type { GovernancePlugin, KernelHandle } from "../plugin.js";
 import { mapToEuAiAct } from "../compliance.js";
-import type { ComplianceAssessmentConfig } from "../compliance-types.js";
+import type { ComplianceAssessmentConfig, ComplianceReport } from "../compliance-types.js";
 import { coverageMatrix, mapToOwaspAgentic } from "../owasp-agentic.js";
-import type { OwaspAssessmentConfig } from "../owasp-agentic-types.js";
-import { mapToNistAiRmf, type NistAssessmentConfig } from "../nist-ai-rmf.js";
-import { mapToIso42001, type Iso42001AssessmentConfig } from "../iso-42001.js";
+import type {
+  OwaspAgenticReport,
+  OwaspAssessmentConfig,
+  OwaspCoverageEntry,
+} from "../owasp-agentic-types.js";
+import { mapToNistAiRmf, type NistAiRmfReport, type NistAssessmentConfig } from "../nist-ai-rmf.js";
+import { mapToIso42001, type Iso42001AssessmentConfig, type Iso42001Report } from "../iso-42001.js";
 
 // ─── Revisions ──────────────────────────────────────────────────
 //
@@ -48,22 +52,6 @@ const CORE_RANGE = "^0.22.0";
 
 // ─── Shared scaffold ────────────────────────────────────────────
 
-/**
- * Narrow the `unknown` a reporter is handed by `gov.report(id, config)` to the
- * config its mapping function already takes. `KernelHandle.registerReporter`
- * is typed `Reporter<unknown, unknown>`, so the boundary has to be checked
- * somewhere; doing it here means one guard that names the reporter instead of
- * four blind casts.
- */
-function reporterConfig<Config>(id: string, config: unknown): Config {
-  if (config === null || typeof config !== "object") {
-    throw new TypeError(
-      `Reporter "${id}" expects its assessment config object, got ${config === null ? "null" : typeof config}`,
-    );
-  }
-  return config as Config;
-}
-
 /** Every standards plugin is reporters-only on a 0.22 kernel. */
 function standardsPlugin(
   id: string,
@@ -83,8 +71,9 @@ function standardsPlugin(
 /** EU AI Act (Arts 9, 11, 12, 14, 15, 50) self-assessment. */
 export function euAiActPlugin(): GovernancePlugin {
   return standardsPlugin("standards/eu-ai-act", EU_AI_ACT_REVISION, (kernel) => {
-    kernel.registerReporter("standards/eu-ai-act", (config) =>
-      mapToEuAiAct(reporterConfig<ComplianceAssessmentConfig>("standards/eu-ai-act", config)));
+    kernel.registerReporter<ComplianceAssessmentConfig, ComplianceReport>(
+      "standards/eu-ai-act", mapToEuAiAct,
+    );
   });
 }
 
@@ -96,26 +85,30 @@ export function euAiActPlugin(): GovernancePlugin {
  */
 export function owaspAgenticPlugin(): GovernancePlugin {
   return standardsPlugin("standards/owasp-asi", OWASP_ASI_REVISION, (kernel) => {
-    kernel.registerReporter("standards/owasp-asi", (config) =>
-      mapToOwaspAgentic(reporterConfig<OwaspAssessmentConfig>("standards/owasp-asi", config)));
-    kernel.registerReporter("standards/owasp-asi/coverage", (config) =>
-      coverageMatrix(reporterConfig<OwaspAssessmentConfig>("standards/owasp-asi/coverage", config)));
+    kernel.registerReporter<OwaspAssessmentConfig, OwaspAgenticReport>(
+      "standards/owasp-asi", mapToOwaspAgentic,
+    );
+    kernel.registerReporter<OwaspAssessmentConfig, OwaspCoverageEntry[]>(
+      "standards/owasp-asi/coverage", coverageMatrix,
+    );
   });
 }
 
 /** NIST AI RMF 1.0 — 14 subcategories across Govern / Map / Measure / Manage. */
 export function nistAiRmfPlugin(): GovernancePlugin {
   return standardsPlugin("standards/nist-ai-rmf", NIST_AI_RMF_REVISION, (kernel) => {
-    kernel.registerReporter("standards/nist-ai-rmf", (config) =>
-      mapToNistAiRmf(reporterConfig<NistAssessmentConfig>("standards/nist-ai-rmf", config)));
+    kernel.registerReporter<NistAssessmentConfig, NistAiRmfReport>(
+      "standards/nist-ai-rmf", mapToNistAiRmf,
+    );
   });
 }
 
 /** ISO/IEC 42001:2023 AI management system clauses. */
 export function iso42001Plugin(): GovernancePlugin {
   return standardsPlugin("standards/iso-42001", ISO_42001_REVISION, (kernel) => {
-    kernel.registerReporter("standards/iso-42001", (config) =>
-      mapToIso42001(reporterConfig<Iso42001AssessmentConfig>("standards/iso-42001", config)));
+    kernel.registerReporter<Iso42001AssessmentConfig, Iso42001Report>(
+      "standards/iso-42001", mapToIso42001,
+    );
   });
 }
 

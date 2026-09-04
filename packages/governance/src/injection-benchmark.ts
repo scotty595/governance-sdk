@@ -184,12 +184,16 @@ export async function runBenchmark(detector: DetectorFn): Promise<BenchmarkResul
     const got = result.detected;
 
     // Track by category
-    if (!byCategory[sample.category]) byCategory[sample.category] = { total: 0, detected: 0, missed: 0 };
-    byCategory[sample.category].total++;
+    let category = byCategory[sample.category];
+    if (!category) {
+      category = { total: 0, detected: 0, missed: 0 };
+      byCategory[sample.category] = category;
+    }
+    category.total++;
 
     if (expected && got) {
       tp++;
-      byCategory[sample.category].detected++;
+      category.detected++;
     } else if (!expected && !got) {
       tn++;
     } else if (!expected && got) {
@@ -197,7 +201,7 @@ export async function runBenchmark(detector: DetectorFn): Promise<BenchmarkResul
       failures.push({ id: sample.id, input: sample.input, expected: "benign", got: "injection", score: result.score });
     } else {
       fn++;
-      byCategory[sample.category].missed++;
+      category.missed++;
       failures.push({ id: sample.id, input: sample.input, expected: "injection", got: "benign", score: result.score });
     }
   }

@@ -121,8 +121,10 @@ function generateUUID(): string {
   } else {
     for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
   }
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  // `bytes` is a fixed 16-byte allocation, so indices 6 and 8 always exist;
+  // the fallbacks only exist so the compiler can see it without an assertion.
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40; // version 4
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80; // variant 10x
   const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
@@ -147,10 +149,14 @@ export function integrityToHash(integrity: string): CycloneDxHash | undefined {
   // npm writes integrity as e.g. `sha512-<base64>` (SRI format)
   const match = /^sha(256|384|512)-(.+)$/.exec(integrity);
   if (!match) return undefined;
-  const alg = `SHA-${match[1]}` as CycloneDxHash["alg"];
+  const [, bits, base64] = match;
+  // Both groups are mandatory in the pattern; an unreadable integrity string
+  // takes the same "unrecognised format" exit as a non-matching one.
+  if (bits === undefined || base64 === undefined) return undefined;
+  const alg = `SHA-${bits}` as CycloneDxHash["alg"];
   // Convert base64 → hex so validators that expect hex content pass.
   try {
-    const buf = Buffer.from(match[2], "base64");
+    const buf = Buffer.from(base64, "base64");
     return { alg, content: buf.toString("hex") };
   } catch {
     return undefined;

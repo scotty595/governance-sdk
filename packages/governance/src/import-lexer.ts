@@ -130,9 +130,12 @@ function findStatementEnd(src: string, from: number): number {
 }
 
 function prevSignificant(src: string, i: number): string {
-  let j = i - 1;
-  while (j >= 0 && /\s/.test(src[j])) j--;
-  return j >= 0 ? src[j] : "";
+  for (let j = i - 1; j >= 0; j--) {
+    const c = src[j];
+    if (c === undefined) break;
+    if (!/\s/.test(c)) return c;
+  }
+  return "";
 }
 
 /** Find all tool-shaped imports in a file — convenience for callers. */
@@ -224,6 +227,9 @@ function stripCommentsAndStrings(source: string): string {
 
   while (i < n) {
     const c = source[i];
+    // `i < n` guarantees a character; stop scanning rather than emit
+    // `undefined` into the rebuilt source if that ever stops holding.
+    if (c === undefined) break;
     const c2 = source[i + 1] ?? "";
 
     // Line comment
@@ -279,14 +285,21 @@ function stripCommentsAndStrings(source: string): string {
       const quote = c;
       out.push(quote);
       i++;
-      while (i < n && source[i] !== quote) {
-        if (source[i] === "\\" && i + 1 < n) {
-          out.push(source[i], source[i + 1]);
-          i += 2;
-          continue;
+      while (i < n) {
+        const ch = source[i];
+        if (ch === undefined || ch === quote) break;
+        if (ch === "\\") {
+          // Keep the escape and the character it escapes together. A trailing
+          // backslash with nothing after it falls through and is emitted bare.
+          const escaped = source[i + 1];
+          if (escaped !== undefined) {
+            out.push(ch, escaped);
+            i += 2;
+            continue;
+          }
         }
-        if (source[i] === "\n") break; // unterminated — bail
-        out.push(source[i]);
+        if (ch === "\n") break; // unterminated — bail
+        out.push(ch);
         i++;
       }
       if (i < n && source[i] === quote) {
@@ -310,16 +323,22 @@ function parseStatement(stmt: string): ParsedImport | null {
   // Re-export forms: `export { a, b } from "pkg"` or `export * from "pkg"`
   const reexportNamed = /^export\s+\{([^}]*)\}\s+from\s+["']([^"']+)["']/.exec(s);
   if (reexportNamed) {
+    const [, clause, specifier] = reexportNamed;
+    // A statement we cannot read a specifier out of is not an import we can
+    // report — same answer as an unrecognised statement below.
+    if (specifier === undefined || clause === undefined) return null;
     return {
-      specifier: reexportNamed[2],
-      named: parseNamedClause(reexportNamed[1]),
+      specifier,
+      named: parseNamedClause(clause),
       kind: "named",
     };
   }
   const reexportStar = /^export\s+\*\s+(?:as\s+(\w+)\s+)?from\s+["']([^"']+)["']/.exec(s);
   if (reexportStar) {
+    const specifier = reexportStar[2];
+    if (specifier === undefined) return null;
     return {
-      specifier: reexportStar[2],
+      specifier,
       namespaceName: reexportStar[1],
       named: [],
       kind: "namespace",
@@ -332,8 +351,10 @@ function parseStatement(stmt: string): ParsedImport | null {
   // Side-effect: `import "pkg"`
   const sideEffect = /^import\s+["']([^"']+)["']/.exec(s);
   if (sideEffect) {
+    const specifier = sideEffect[1];
+    if (specifier === undefined) return null;
     return {
-      specifier: sideEffect[1],
+      specifier,
       named: [],
       kind: "side-effect",
     };
@@ -343,6 +364,7 @@ function parseStatement(stmt: string): ParsedImport | null {
   const fromMatch = /from\s+["']([^"']+)["']/.exec(s);
   if (!fromMatch) return null;
   const specifier = fromMatch[1];
+  if (specifier === undefined) return null;
   const clause = s
     .slice("import".length, fromMatch.index)
     .replace(/^\s*type\s+/, " ") // drop leading `type ` (type-only import)
@@ -410,7 +432,12 @@ function parseNamedClause(inner: string): Array<{ imported: string; local: strin
     if (!part) continue;
     const aliasMatch = /^(\w+)\s+as\s+(\w+)$/.exec(part);
     if (aliasMatch) {
-      out.push({ imported: aliasMatch[1], local: aliasMatch[2] });
+      const [, imported, local] = aliasMatch;
+      // Both groups are mandatory; skip rather than emit a half-formed
+      // binding (an `undefined` local name) if that ever changes.
+      if (imported !== undefined && local !== undefined) {
+        out.push({ imported, local });
+      }
       continue;
     }
     if (/^\w+$/.test(part)) {

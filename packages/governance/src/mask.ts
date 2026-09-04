@@ -42,11 +42,12 @@ export function maskSensitiveData(text: string, patternIds?: string[]): string {
 
 /** Replace each span with [REDACTED], merging spans that overlap or touch. */
 function redactSpans(text: string, spans: Array<[number, number]>): string {
-  if (spans.length === 0) return text;
   spans.sort((a, b) => a[0] - b[0]);
+  const first = spans[0];
+  if (first === undefined) return text; // no spans — nothing to redact
   let out = "";
   let cursor = 0;
-  let [start, end] = spans[0];
+  let [start, end] = first;
   for (const [s, e] of spans.slice(1)) {
     if (s <= end) {
       end = Math.max(end, e);

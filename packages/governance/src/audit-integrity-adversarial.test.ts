@@ -1,7 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createGovernance } from "./index";
+import { createGovernance, createMemoryStorage } from "./index";
 import { createIntegrityAudit, verifyAuditIntegrity, constantTimeEqualHex } from "./audit-integrity";
+import type { IntegrityAuditEvent } from "./audit-integrity";
+import type { AuditEvent, GovernanceStorage } from "./storage";
 
 const KEY = "test-signing-key-do-not-use-in-prod";
 
@@ -110,6 +112,91 @@ describe("audit integrity — adversarial scenarios", () => {
     const result = await verifyAuditIntegrity([...entries, fake], KEY);
     assert.equal(result.valid, false);
     assert.equal(result.brokenAt, 3);
+  });
+
+  // ─── Damaged input, not a damaged chain ──────────────────────────────
+  //
+  // `verifyAuditIntegrity` takes an array from the caller. A truncated export,
+  // a hand-edited JSON file, or a buggy adapter can hand it a hole, a `null`,
+  // or an entry with no `createdAt` — every one of those used to reach the
+  // sort comparator and throw. A verifier that crashes on a tampered chain is
+  // indistinguishable from one that has no opinion about it.
+
+  it("verifies an empty chain trivially", async () => {
+    const result = await verifyAuditIntegrity([], KEY);
+    assert.equal(result.valid, true);
+    assert.equal(result.eventsVerified, 0);
+    assert.equal(result.totalEvents, 0);
+    assert.equal(result.brokenAt, null);
+    assert.equal(result.breakDetail, null);
+  });
+
+  it("reports a break (not a crash) for a chain array with a hole in it", async () => {
+    const { entries } = await buildChain(4);
+    // `[e0, <hole>, e2, e3]` — what `delete arr[1]` or a partially populated
+    // `new Array(n)` leaves behind, and what a truncated export deserializes to.
+    const holed = entries
+      .slice(0, 1)
+      .concat(new Array<IntegrityAuditEvent>(1))
+      .concat(entries.slice(2));
+    assert.equal(holed.length, 4);
+
+    const result = await verifyAuditIntegrity(holed, KEY);
+    assert.equal(result.valid, false);
+    assert.equal(result.brokenAt, 1);
+    assert.equal(result.totalEvents, 4);
+    assert.match(result.breakDetail ?? "", /position 1 is missing/i);
+  });
+
+  it("reports a break (not a crash) for a null entry from a JSON round-trip", async () => {
+    const { entries } = await buildChain(3);
+    const nulled = entries.map((e, i) =>
+      i === 1 ? (null as unknown as IntegrityAuditEvent) : e,
+    );
+    const result = await verifyAuditIntegrity(nulled, KEY);
+    assert.equal(result.valid, false);
+    assert.equal(result.brokenAt, 1);
+    assert.match(result.breakDetail ?? "", /not an audit event|missing/i);
+  });
+
+  it("reports a break (not a crash) for an entry with no createdAt to sort by", async () => {
+    const { entries } = await buildChain(3);
+    const undated = entries.map((e, i) =>
+      i === 2 ? ({ ...e, createdAt: undefined } as unknown as IntegrityAuditEvent) : e,
+    );
+    const result = await verifyAuditIntegrity(undated, KEY);
+    assert.equal(result.valid, false);
+    assert.equal(result.brokenAt, 2);
+  });
+
+  it("verify() reports a break when the storage adapter returns a sparse result", async () => {
+    // `integrityAudit.verify()` reads events back through the caller's storage
+    // adapter, which is not ours to trust. A leading hole survives the sort as
+    // a trailing one, so the first three entries verify and the hole is the break.
+    const base = createMemoryStorage();
+    const sparse: GovernanceStorage = {
+      ...base,
+      async queryAuditEvents(filters) {
+        const rows = await base.queryAuditEvents(filters);
+        return new Array<AuditEvent>(1).concat(rows);
+      },
+    };
+    const gov = createGovernance({ storage: sparse });
+    const integrity = createIntegrityAudit(gov, { signingKey: KEY });
+    for (let i = 0; i < 3; i++) {
+      await integrity.log({
+        agentId: "bot",
+        eventType: "tool_call",
+        outcome: "allow",
+        severity: "info",
+        detail: { index: i },
+      });
+    }
+
+    const result = await integrity.verify();
+    assert.equal(result.valid, false);
+    assert.equal(result.brokenAt, 3);
+    assert.match(result.breakDetail ?? "", /position 3 is missing/i);
   });
 
   it("detects wrong secret: a full-chain re-verification with the wrong key fails at entry 0", async () => {

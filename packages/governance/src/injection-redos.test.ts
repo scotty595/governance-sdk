@@ -18,7 +18,19 @@ import { detectInjection } from "./injection-detect";
 import { maskSensitiveData } from "./mask";
 
 const KB = 1024;
-const BUDGET_MS = 150;
+/**
+ * A hang backstop, not a performance target. The shapes here took 4–120+
+ * seconds before the patterns were bounded, so anything under a second means
+ * "not blowing up"; the real guard is the scaling assertion below, which does
+ * not depend on this constant at all.
+ */
+const BUDGET_MS = 750;
+
+/**
+ * How much the cost may grow when the input grows 4x. A linear scan is ~4x; a
+ * quadratic one is ~16x. 8x sits between them with room for measurement noise.
+ */
+const MAX_GROWTH_FOR_4X_INPUT = 8;
 
 /** Invisible code points are spelled out so the input shape stays readable. */
 const cp = (...codes: number[]): string => String.fromCodePoint(...codes);
@@ -71,9 +83,42 @@ function timeMs(fn: () => void): number {
   return performance.now() - start;
 }
 
+/**
+ * Best of N. The whole suite runs in parallel, so a single sample measures
+ * scheduler contention as much as it measures the code; the minimum is the
+ * closest thing to an uncontended reading we can get cheaply.
+ */
+function bestOf(fn: () => void, runs = 3): number {
+  let best = Infinity;
+  for (let i = 0; i < runs; i++) best = Math.min(best, timeMs(fn));
+  return best;
+}
+
 function assertFast(label: string, fn: () => void): void {
-  const ms = timeMs(fn);
-  assert.ok(ms < BUDGET_MS, `${label} took ${ms.toFixed(1)}ms (budget ${BUDGET_MS}ms)`);
+  const ms = bestOf(fn);
+  assert.ok(ms < BUDGET_MS, `${label} took ${ms.toFixed(1)}ms (backstop ${BUDGET_MS}ms) — a blowup, not slow hardware`);
+}
+
+/**
+ * The assertion that actually guards against catastrophic backtracking:
+ * quadruple the input and the cost must not grow more than `MAX_GROWTH_FOR_4X_INPUT`.
+ *
+ * This is immune to machine load in a way a wall-clock budget is not — both
+ * measurements suffer the same contention, so the ratio survives it — and it
+ * fails on a quadratic pattern even on hardware fast enough to stay inside any
+ * absolute budget.
+ */
+function assertLinearInInputSize(label: string, build: (chars: number) => string, run: (input: string) => void): void {
+  const small = build(8 * KB);
+  const large = build(32 * KB);
+  run(small); // warm up, so JIT compilation is not charged to the first sample
+  const smallMs = Math.max(bestOf(() => run(small)), 0.05);
+  const largeMs = bestOf(() => run(large));
+  const growth = largeMs / smallMs;
+  assert.ok(
+    growth < MAX_GROWTH_FOR_4X_INPUT,
+    `${label}: 4x the input cost ${growth.toFixed(1)}x the time (${smallMs.toFixed(2)}ms to ${largeMs.toFixed(2)}ms) — that is super-linear`,
+  );
 }
 
 function assertRegexLinear(id: string, re: RegExp): void {
@@ -116,11 +161,19 @@ describe("ReDoS guard — detectInjection() end to end", () => {
       }
     });
   }
+  it("cost stays linear in input size for the shapes that used to blow up", () => {
+    // The four shapes that were quartic, quadratic and cubic before bounding.
+    assertLinearInInputSize("alnum run", (n) => "a".repeat(n), (i) => { detectInjection(i); });
+    assertLinearInInputSize("gap shape", (n) => "a".repeat(n / 2) + "    " + "b".repeat(n / 2), (i) => { detectInjection(i); });
+    assertLinearInInputSize("trigger + spaces", (n) => "override" + " ".repeat(n) + "x", (i) => { detectInjection(i); });
+    assertLinearInInputSize("markdown openers", (n) => "[](".repeat(n / 3), (i) => { detectInjection(i); });
+  });
+
   it("50KB benign prose stays fast", () => {
     detectInjection(BENIGN_PROSE); // warm up
-    const ms = timeMs(() => detectInjection(BENIGN_PROSE));
+    const ms = bestOf(() => detectInjection(BENIGN_PROSE));
     console.log(`benign 50KB prose: detectInjection ${ms.toFixed(2)}ms`);
-    assert.ok(ms < BUDGET_MS, `benign prose took ${ms.toFixed(1)}ms`);
+    assert.ok(ms < BUDGET_MS, `benign prose took ${ms.toFixed(1)}ms (backstop ${BUDGET_MS}ms)`);
   });
 });
 

@@ -138,7 +138,11 @@ function parseObject(lines: string[], start: number, minIndent: number): { value
 
   while (i < lines.length) {
     const line = lines[i];
-    if (line.trim() === "" || line.trim().startsWith("#")) { i++; continue; }
+    // `i < lines.length` guarantees a line here; stop rather than read past
+    // the end if that ever stops being true.
+    if (line === undefined) break;
+    const trimmedLine = line.trim();
+    if (trimmedLine === "" || trimmedLine.startsWith("#")) { i++; continue; }
 
     const lineIndent = line.search(/\S/);
     if (lineIndent < minIndent) break;
@@ -146,7 +150,17 @@ function parseObject(lines: string[], start: number, minIndent: number): { value
     const match = line.match(/^(\s*)([^:\s]+)\s*:\s*(.*)/);
     if (!match) { i++; continue; }
 
-    const [, , key, rest] = match;
+    const key = match[2];
+    const rest = match[3];
+    // Both groups are mandatory in the pattern above, so a match always
+    // carries them. The check stays because the alternative — writing an
+    // `undefined` key onto a parsed policy object — is a failure mode a
+    // loader of untrusted documents must never have.
+    if (key === undefined || rest === undefined) {
+      throw new Error(
+        `Invalid YAML at line ${i + 1}: could not read a "key: value" pair from ${JSON.stringify(line)}`,
+      );
+    }
     const valueIndent = lineIndent + 2;
 
     if (FORBIDDEN_KEYS.has(key)) {
@@ -180,12 +194,14 @@ function parseArray(lines: string[], start: number, minIndent: number): { value:
 
   while (i < lines.length) {
     const line = lines[i];
-    if (line.trim() === "" || line.trim().startsWith("#")) { i++; continue; }
+    // See parseObject: bounded by the loop condition, guarded anyway.
+    if (line === undefined) break;
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) { i++; continue; }
 
     const lineIndent = line.search(/\S/);
     if (lineIndent < minIndent) break;
 
-    const trimmed = line.trim();
     if (trimmed.startsWith("- ")) {
       const value = trimmed.slice(2).trim();
       // An item is an inline object only when it starts with a bare `key:`
@@ -199,6 +215,12 @@ function parseArray(lines: string[], start: number, minIndent: number): { value:
         const nested = parseObject(lines, i + 1, lineIndent + 2);
         if (inlineKey) {
           const k = inlineKey[1];
+          // Group 1 is mandatory in the pattern; same reasoning as parseObject.
+          if (k === undefined) {
+            throw new Error(
+              `Invalid YAML at line ${i + 1}: could not read a key from list item ${JSON.stringify(trimmed)}`,
+            );
+          }
           if (FORBIDDEN_KEYS.has(k)) throw new Error(`Invalid YAML: key "${k}" is not allowed`);
           const obj: Record<string, unknown> = { [k]: parseScalar((inlineKey[2] ?? "").trim()) };
           Object.assign(obj, nested.value);
@@ -236,9 +258,11 @@ function parseScalar(s: string): string | number | boolean {
 
 function findNextNonEmpty(lines: string[], start: number): { trimmed: string; indent: number } | null {
   for (let i = start; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
+    const line = lines[i];
+    if (line === undefined) break;
+    const trimmed = line.trim();
     if (trimmed !== "" && !trimmed.startsWith("#")) {
-      return { trimmed, indent: lines[i].search(/\S/) };
+      return { trimmed, indent: line.search(/\S/) };
     }
   }
   return null;

@@ -162,6 +162,53 @@ describe("fromYAML", () => {
     assert.equal(conditions[0].type, "tool_blocked");
   });
 
+  // The parser is hand-written and walks `lines[i]` / regex capture groups by
+  // index. These cover the document shapes that push those walks to their
+  // bounds — a trailing key with nothing after it, a document that ends inside
+  // a nested block, and one that is nothing but comments and blank lines.
+
+  it("parses a document whose last line is a key with no value", () => {
+    const yaml = `rules:
+  - id: r1
+    name: R1
+    outcome: block
+    reason: no
+    priority: 10
+    enabled: true
+    condition:
+      type: tool_blocked
+      params:`;
+    const [rule] = fromYAML(yaml);
+    assert.equal(rule.id, "r1");
+    assert.deepEqual(rule.condition.params, {});
+  });
+
+  it("skips comments and blank lines between rule fields", () => {
+    const yaml = `# leading comment
+
+rules:
+
+  # about r1
+  - id: r1
+
+    name: R1
+    outcome: block
+    reason: no
+    priority: 10
+    enabled: true
+    condition:
+      # the condition
+      type: tool_blocked
+`;
+    const rules = fromYAML(yaml);
+    assert.equal(rules.length, 1);
+    assert.equal(rules[0].condition.type, "tool_blocked");
+  });
+
+  it("rejects a document that is only comments, without reading past the end", () => {
+    assert.throws(() => fromYAML("# nothing here\n\n# still nothing\n"), /expected top-level 'rules' array/);
+  });
+
   it("rejects __proto__ keys", () => {
     const yaml = `rules:
   - id: r1

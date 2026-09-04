@@ -343,12 +343,14 @@ export async function createPostgresStorage(
     await ensureMigrated();
     if (!filters) {
       const result = await pool.query<{ count: string }>(`SELECT COUNT(*) as count FROM ${prefix}_audit_events`);
-      return parseInt(result.rows[0].count, 10);
+      // COUNT(*) always returns exactly one row; no row means the query did
+      // not run as written, and a count of 0 is the honest answer.
+      return parseInt(result.rows[0]?.count ?? "0", 10);
     }
     const { clauses, values } = buildAuditWhere(filters);
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const result = await pool.query<{ count: string }>(`SELECT COUNT(*) as count FROM ${prefix}_audit_events ${where}`, values);
-    return parseInt(result.rows[0].count, 10);
+    return parseInt(result.rows[0]?.count ?? "0", 10);
   }
 
   if (autoMigrate) await migrate();

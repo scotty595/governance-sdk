@@ -110,7 +110,8 @@ export interface VercelTool {
  * `toolFieldExtraction` (map tool arguments onto `ctx.targetPath` /
  * `ctx.targetUrl` so `scope_boundary` and `network_allowlist` match).
  */
-export type GovernedToolsConfig = AdapterConfig;
+/* An interface rather than an alias so consumer declaration merging still works. */
+export interface GovernedToolsConfig extends AdapterConfig {}
 
 export interface GovernedToolsResult<T> {
   tools: T;

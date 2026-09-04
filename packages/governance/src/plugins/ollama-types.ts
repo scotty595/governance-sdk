@@ -64,7 +64,8 @@ export interface OllamaToolExecutor {
  * `toolFieldExtraction` (map tool arguments onto `ctx.targetPath` /
  * `ctx.targetUrl`).
  */
-export type GovernOllamaConfig = AdapterConfig;
+/* An interface rather than an alias so consumer declaration merging still works. */
+export interface GovernOllamaConfig extends AdapterConfig {}
 
 // ─── Results ────────────────────────────────────────────────
 

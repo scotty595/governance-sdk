@@ -200,8 +200,10 @@ function extractInlineTools(
       pattern.lastIndex = 0;
       let match;
       while ((match = pattern.exec(content)) !== null) {
+        // A pattern without a capture group (or one whose group did not
+        // participate) yields no tool name — skip it rather than record one.
         const name = match[1];
-        if (isValidToolName(name)) tools.add(name);
+        if (name !== undefined && isValidToolName(name)) tools.add(name);
       }
     }
   }
