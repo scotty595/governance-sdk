@@ -1,27 +1,9 @@
 /**
- * MCP call recorder — honest-naming re-export of `/plugins/mcp-chain-audit`.
+ * Compatibility re-export: `governance-sdk/plugins/mcp-call-recorder`.
  *
- * This records MCP tool calls that the caller explicitly reports via
- * `recordCall(...)`. It does NOT automatically propagate across MCP
- * server boundaries — nested MCP→MCP sub-calls must be recorded by the
- * intermediate server or they will not appear in the chain. Pattern
- * detection (read→upload, etc.) runs against whatever has been recorded.
- *
- * @example
- * ```ts
- * import { createMCPCallRecorder } from 'governance-sdk/plugins/mcp-call-recorder';
- * const recorder = createMCPCallRecorder();
- * recorder.recordCall({ server: 'files', tool: 'read', args: { path: '/secrets' } });
- * const patterns = recorder.detectPatterns();
- * ```
+ * The implementation moved to @governance-sdk/adapters in the kernel/plugin split. This
+ * file keeps the published subpath working unchanged; import it from the
+ * package above if you want the dependency to be explicit.
  */
-export {
-  createMCPCallRecorder,
-  createChainAuditor,
-  type ChainEntry,
-  type ChainEntry as MCPCallRecord,
-  type ChainAuditConfig,
-  type ChainAuditConfig as MCPCallRecorderConfig,
-  type SuspiciousPattern,
-  type PatternMatch,
-} from "./mcp-chain-audit.js";
+
+export * from "@governance-sdk/adapters/plugins/mcp-call-recorder.js";

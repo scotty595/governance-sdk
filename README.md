@@ -43,15 +43,15 @@ corrections welcome).
 |---|:-:|:-:|:-:|:-:|
 | Runtime dependencies | **0** | Python runtime + LLM | Python + validator stack | LangChain |
 | TypeScript-first | **✅** | ❌ (Python) | ❌ (Python) | ✅ |
-| Framework-agnostic | **✅ (12 integration modules, 11 frameworks)** | Rails-only | Model-wrapping | LangChain-only |
+| Framework-agnostic | **✅ (14 integration modules, 13 frameworks)** | Rails-only | Model-wrapping | LangChain-only |
 | Policy *enforcement* (block/approval/mask) | **✅** | ✅ | ✅ | Partial |
 | Behavioral scoring / trust levels | **✅** | ❌ | ❌ | ❌ |
 | Tamper-evident audit (HMAC chain) | **✅** | ❌ | ❌ | ❌ |
-| Standards mapping (EU AI Act / OWASP / NIST / ISO 42001) | **✅** | ❌ | Partial | ❌ |
-| Ed25519 agent identity | **✅** | ❌ | ❌ | ❌ |
+| Standards mapping (EU AI Act / OWASP / NIST RMF + 600-1 / ISO 42001 / CSA AICM / IMDA) | **✅** | ❌ | Partial | ❌ |
+| Agent identity (Ed25519, JWT/JWKS, SPIFFE) | **✅** | ❌ | ❌ | ❌ |
 | Zero-dep embedded use in any TS runtime | **✅** | ❌ | ❌ | ❌ |
 
-To our knowledge, `governance-sdk` is the only zero-dependency TypeScript option that is framework-agnostic and ships mappings to all four standards. The table reflects each project's public documentation as of August 2026; if a cell is wrong, [open an issue](https://github.com/scotty595/governance-sdk/issues) and it will be corrected.
+To our knowledge, `governance-sdk` is the only zero-dependency TypeScript option that is framework-agnostic and ships seven standards mappings. The table reflects each project's public documentation as of August 2026; if a cell is wrong, [open an issue](https://github.com/scotty595/governance-sdk/issues) and it will be corrected.
 
 Deliberately not in the table: general-purpose policy engines (OPA, Cedar, Casbin), which can express similar rules but know nothing about prompts, tool calls, or streaming — if you already run one, put it behind a [custom condition](#custom-conditions); and hosted AI-security gateways, which sit on the network rather than in your process.
 
@@ -132,10 +132,27 @@ is exactly what it does and does not do:
 
 ## Packages
 
-| Package | Description |
-|---------|-------------|
-| [`governance-sdk`](./packages/governance) | Core SDK — policy engine, scoring, injection detection, audit, compliance, standards mapping, 12 integration modules across 11 frameworks (10 featured + MCP toolkit + Bedrock). **0 runtime deps.** |
-| [`governance-sdk-platform`](./packages/governance-platform) | Optional PostgreSQL storage layer — auto-migrating schema, org settings, policy tiers. |
+One repository, four packages. Three are private workspaces under a
+placeholder scope; `governance-sdk` is the only publishable unit and is what
+you install. The layering between them is a build constraint, not a convention.
+The published tarball is self-contained: `npm run pack` stages the three
+scoped packages inside it, because npm does not bundle workspace links on its
+own, and `npm run verify-pack` installs that tarball into a fresh project and
+imports every subpath. CI runs both.
+
+| Package | Depends on | What it is |
+|---------|-----------|------------|
+| [`governance-sdk`](./packages/governance) | the three below | **What you install.** The meta-package: every published subpath, `createGovernance()` with the default extension set, the CLI. |
+| [`@governance-sdk/core`](./packages/core) | nothing | The kernel: policy engine, tamper-evident audit chain, storage contract, session ledger, event stream, plugin contract. No detector, no standards mapping, no scoring model. **0 runtime deps.** |
+| [`@governance-sdk/plugins`](./packages/plugins) | core | Extensions: injection detection, the sensitive-data corpus, standards mappings, scoring, identity, supply chain, policy authoring, the Postgres adapter. |
+| [`@governance-sdk/adapters`](./packages/adapters) | core, plugins | The shared adapter kernel, one thin mapping per framework, and the Agent Hooks conformance surface. |
+| [`governance-sdk-platform`](./packages/governance-platform) | — | Optional PostgreSQL storage layer — auto-migrating schema, org settings, policy tiers. |
+
+`createGovernanceKernel()` from `@governance-sdk/core` gives you a bare kernel
+that says what it lacks rather than pretending: a rule naming an unregistered
+condition is rejected when added, a mask with no strategy fails closed, and
+`register()` reports "Unscored". `createGovernance()` is that plus the defaults.
+See [docs/restructure-plan.md](./docs/restructure-plan.md).
 
 ## Quick Start
 
@@ -259,6 +276,76 @@ if (decision.outcome === 'require_approval') {
   }
 }
 ```
+
+### Plugins
+
+Detection corpora, standards mappings, scoring models, identity verifiers and
+audit destinations revise on other people's schedules — OWASP annually, a
+regulator by sixteen months at a stroke, an acquired detector library by
+ceasing to ship. They attach to the kernel through a contract instead of
+living inside its semver:
+
+```typescript
+import { createGovernance } from 'governance-sdk';
+
+const gov = createGovernance();
+
+await gov.use({
+  id: 'sinks/otel',
+  version: '1.0.0',
+  requires: { core: '^0.22.0', capabilities: ['sinks'] },
+  install(kernel) {
+    kernel.addSink((event) => span(event));          // every audit event, after it is chained
+    kernel.registerCondition({ /* … */ });            // validated like a built-in from now on
+    kernel.registerMaskStrategy('my_condition', redact);
+    kernel.registerReporter('standards/my-standard', assess);
+    kernel.events.on('enforcement', onDecision);
+  },
+});
+
+gov.plugins();                       // [{ id, version, installedAt }]
+await gov.report('standards/my-standard', { agents });
+await gov.unuse('sinks/otel');
+```
+
+A plugin receives a `KernelHandle` — five registration verbs, the event
+stream, an audit writer and `failModes()` — and never the instance, its
+storage or its rules. `use()` is idempotent per id and refuses a plugin whose
+`requires.core` range this kernel does not satisfy. Anything a plugin needs
+that the handle does not offer is a kernel feature request, not a cast.
+
+What ships on that contract today:
+
+| Plugin | Import | Registers |
+|---|---|---|
+| Seven standards mappings (`allStandardsPlugins()`) | `governance-sdk/ext/standards` | a reporter per standard: `standards/eu-ai-act`, `standards/owasp-asi` (+ `/coverage`), `standards/nist-ai-rmf`, `standards/nist-ai-600-1`, `standards/iso-42001`, `standards/csa-aicm`, `standards/imda-agentic` |
+| Posture scoring (`scoring/posture`) | `governance-sdk/ext/scoring` | the 7-dimension scorer as a kernel extension |
+| Regex detection (`detect/regex`) | `governance-sdk/ext/detect` | the injection and sensitive-data conditions and the mask strategy |
+| External identity (`identity/external`) | `governance-sdk/ext/identity` | a verifier under `gov.getVerifier('identity')` for JWT, JWKS and SPIFFE tokens |
+
+`getVerifier()` is typed through `VerifierRegistry`, which the registering
+plugin augments: import the identity plugin and `getVerifier('identity')`
+returns a `RegisteredIdentityVerifier`; do not, and it returns `unknown`. The
+kernel never learns a plugin's types.
+
+### Agent Hooks conformance
+
+[Agent Hooks](https://commandline.microsoft.com/agent-hooks-framework-neutral-ai-governance-contract/)
+is an open, framework-neutral governance contract: eight interception points,
+three verdicts. Any runtime that speaks it can drive this SDK:
+
+```typescript
+import { createAgentHooksAdapter } from 'governance-sdk/conformance/agent-hooks';
+
+const hooks = await createAgentHooksAdapter(gov, { agentName: 'support', owner: 'team' });
+await hooks.preTool('send_email', { to: 'customer@example.com' });
+// => { verdict: 'deny' | 'allow' | 'transform', reason?, payload?, approval?, decision? }
+```
+
+Two edges of that contract are lossy, and the mapping says so rather than
+hiding it: `require_approval` becomes a deny carrying the approval id and poll
+URL, because the contract has no third state; and `warn` becomes an allow
+carrying an annotation, so a host that ignores annotations loses the warning.
 
 ### Custom Conditions
 
@@ -674,7 +761,7 @@ storage on every `enforce()` — that would hurt the thin-client design. For
 fleet-wide guaranteed halt, route through a hosted `enforce` API or
 publish kill events over pub/sub and call `kill()` on every instance.
 
-### Standards self-assessments (EU AI Act, OWASP Agentic, NIST AI RMF, ISO 42001)
+### Standards self-assessments (EU AI Act, OWASP Agentic, NIST AI RMF and 600-1, ISO 42001, CSA AICM, IMDA agentic)
 
 Each module emits a **self-assessment report** mapping governance state to a
 subset of the named framework. These are engineering tools for posture
@@ -699,7 +786,27 @@ Scope disclosures:
   `legacyId`. Self-assessment against SDK-checkable mitigations; not
   OWASP-endorsed.
 - **NIST AI RMF** — 14 subcategories across Govern/Map/Measure/Manage. Does
-  NOT yet cover the NIST AI 600-1 GenAI Profile controls (2024).
+  NOT cover the NIST AI 600-1 GenAI Profile controls; that is the separate
+  mapping below. Run both for a generative-AI system.
+- **NIST AI 600-1 (Generative AI Profile, July 2024)** — 19 of the profile's
+  subcategories (GV, MP, MS, MG) with the twelve §2 GAI risk categories rolled
+  up from them. Risk names, definitions and subcategory headings are verbatim
+  from the NIST PDF; which subcategory bears on which risk is this SDK's
+  attribution, not NIST's. Bias (MS-2.11) and environmental impact (MS-2.12)
+  have no SDK signal and report `not-applicable` unless you attest
+  (`biasEvaluated`, `environmentalImpactAssessed`). Per-action suggested
+  actions and ~30 organisational-process subcategories are out of scope.
+- **CSA AI Controls Matrix v1.1 (June 2026)** — all 18 domains enumerated, 10
+  scored (A&A, AIS, DSP, GRC, IAM, LOG, MDS, SEF, STA, TVM); the other eight
+  report `not-applicable` and are excluded from the score. **No individual
+  control objective is reproduced or assessed** — the control spreadsheet is
+  gated, so this is a domain-level half-mapping and the report says so. Four
+  domain codes are inherited from CCM v4 and flagged `codeVerified: false`.
+- **IMDA Model AI Governance Framework for Agentic AI** — 17 requirements
+  across the four pillars, three by attestation (oversight audit,
+  pre-deployment testing, user training). Maps **v1.0 (January 2026)**; IMDA
+  published v1.5 in May 2026 with the same section structure and one changed
+  identity wording, and the mapping has not yet been diffed against it.
 - **ISO/IEC 42001:2023** — clauses 4-6 and 8-10. Does NOT model the 39 Annex A
   informative controls.
 
@@ -708,9 +815,12 @@ import { mapToEuAiAct }      from 'governance-sdk/compliance';     // EU AI Act 
 import { mapToOwaspAgentic } from 'governance-sdk/owasp-agentic';   // alias of assessOwaspAgentic; also exports coverageMatrix()
 import { mapToNistAiRmf }    from 'governance-sdk/nist-ai-rmf';     // alias of assessNistAiRmf
 import { mapToIso42001 }     from 'governance-sdk/iso-42001';       // alias of assessIso42001
+import { mapToNistAi600 }    from 'governance-sdk/nist-ai-600-1';   // GenAI Profile: 19 subcategories + 12 risk roll-up
+import { mapToCsaAicm }      from 'governance-sdk/csa-aicm';        // 18 domains enumerated, 10 scored
+import { mapToImdaAgentic }  from 'governance-sdk/imda-agentic';    // four pillars, 17 requirements
 
 const report = await mapToEuAiAct({
-  governance: gov, agents: [agent],
+  governance: gov, agents: await gov.storage.listAgents(),
   auditIntegrity: true, humanOversight: true,
 });
 // report.disclaimer — embedded "not legal advice" notice
@@ -720,7 +830,7 @@ const report = await mapToEuAiAct({
 //   postMarketAndDownstream (deprecated) }
 ```
 
-### Agent Identity (Ed25519)
+### Agent Identity (Ed25519, JWT/JWKS, SPIFFE)
 
 Cryptographically-signed agent identity tokens using Ed25519 (RFC 8032) via
 `crypto.subtle`. Zero runtime dependencies. Tokens include a nonce (`jti`),
@@ -779,6 +889,60 @@ certificates are verified against the issuer's key
 (`verifyCertificate(cert, issuerPublicKeyHex)`), and `delegate()` refuses an
 expired parent.
 
+#### Externally issued identity (Entra, Okta, Auth0, SPIFFE)
+
+Agents that already hold a token from your identity provider do not need a
+second, self-issued one. `governance-sdk/identity-jwt` verifies RS256, ES256
+and EdDSA JWTs on Web Crypto alone — no dependency, runs on Workers — against
+a JWKS you hold or a resolver that fetches one. `HS*` and `none` are not
+accepted and cannot be enabled: the algorithm is derived from the key
+material, never from the token, so a key verifies exactly one algorithm and
+the classic algorithm-confusion hole is closed by construction. Checks: `exp`
+(required by default), `nbf`, `iat`, issuer, audience, replay by `jti`, and
+`crit`. Delegation claims (`act`, `azp`, `actor`) are carried through so the
+audit record says who acted for whom.
+
+`createJwksResolver()` is bounded on purpose — a key cap, a TTL, a cooldown
+per unknown `kid`, a rolling refetch budget, and coalesced concurrent misses —
+so a caller choosing `kid` values cannot make you hammer your IdP.
+`governance-sdk/identity-spiffe` adds `verifyJwtSvid()` (audience mandatory,
+`sub` must be a workload SPIFFE ID in an expected trust domain) and a strict
+`parseSpiffeId()`. X.509-SVIDs are not verified; Web Crypto has no chain
+validation.
+
+The plugin wires it to the policy engine:
+
+```typescript
+import { createGovernance, requireSignedIdentity } from 'governance-sdk';
+import { createJwksResolver, verifyJwt } from 'governance-sdk/identity-jwt';
+import { identityPlugin } from 'governance-sdk/ext/identity';
+
+const gov = createGovernance({ rules: [requireSignedIdentity()] });
+await gov.use(identityPlugin({
+  verifier: (token) => verifyJwt(token, {
+    resolveKey: createJwksResolver({ jwksUri: 'https://login.example.com/keys' }),
+    expectedIssuer: 'https://login.example.com/',
+    expectedAudience: 'orders-api',
+  }),
+}));
+
+// Per request, in your host. Typed: importing the plugin is what teaches
+// getVerifier('identity') what it returns.
+const identity = gov.getVerifier?.('identity');
+const check = await identity!.verify(bearerToken, { tool: 'refund' });
+const decision = await gov.enforce({
+  agentId: check.verified ? check.agentId : 'unknown',
+  action: 'tool_call',
+  tool: 'refund',
+  ...check.context,   // exactly the fields require_signed_identity reads
+});
+```
+
+The kernel still does not call the verifier itself — the policy engine is
+synchronous and cannot fetch a JWKS mid-evaluation — which is why
+`check.context` is spread into `enforce()` on every request. Each check
+writes an `identity_verification` audit event (opt out with `audit: false`).
+
 ### Dry-Run Simulation
 
 Test policies against scenarios without affecting production.
@@ -806,7 +970,8 @@ where all three hold.
 - **Tool-result** — `tool_result`-stage rules (injection in returned content,
   leaked secrets, scope/network rules keyed on the tool's args) run on what a
   tool returned **before** the LLM ingests it. Adapters that see tool returns
-  (Mastra, OpenAI Agents, LangChain, LlamaIndex, Genkit, MCP) scan them here;
+  (Mastra, OpenAI Agents, LangChain, LlamaIndex, Genkit, MCP, Claude Agent
+  SDK, Cloudflare Agents) scan them here;
   `scanToolResults` is on by default. Mastra uses the native
   `processToolResult` hook on `@mastra/core` ≥ 1.57 (contributed as
   [mastra-ai/mastra#16012](https://github.com/mastra-ai/mastra/pull/16012)) and
@@ -831,6 +996,18 @@ where all three hold.
 ² Mastra middleware exposes `scanInput` / `scanOutput` / `scanOutputStream` helpers — explicit calls you make from your runtime loop, rather than automatic lifecycle hooks. Use the `mastra-processor` export if you want automatic hooks via `inputProcessors[]` / `outputProcessors[]`.
 ³ Tool *results* are governed too. On `@mastra/core` ≥ 1.57 the processor implements the native `processToolResult` hook, so every tool return is scanned at the `tool_result` stage automatically: block → the result is replaced with `{ blocked, reason, ruleId }` via `messageList.updateToolInvocation` (or the run is tripwired with `toolResultBlockMode: 'abort'`); mask → the redacted text replaces it. Streaming clients see the processed value. On older Mastra, or for tools run outside the agent loop, use `processor.wrapTool()` / `wrapTools()` — wrapped tools are skipped by the hook, so mixing both never double-scans.
 ⁴ Incremental in `sliding` / `per-chunk` mode (first text part emitted after one chunk, or after the lookback window); the default `buffered` mode returns the full response at once.
+
+### Agent runtimes
+
+Runtimes that own the model loop themselves. Tool calls and tool results are
+governed automatically; the prompt and the final answer are scanned through
+`preprocess()` / `postprocess()` functions the host calls where it owns them,
+because neither runtime exposes a hook for those.
+
+| Runtime | Import Path | Scope |
+|---|---|---|
+| Claude Agent SDK | `governance-sdk/plugins/claude-agent` | `canUseTool` and the `PreToolUse` / `PostToolUse` hooks: every tool call is decided at the `process` stage, every tool result scanned at `tool_result`. A refusal is returned as the SDK's own deny, not thrown into its error path. Typed against the SDK's documented surface rather than its shipped typings — a mismatch is a compile error in `query({ options })`, never a bypass. |
+| Cloudflare Agents | `governance-sdk/plugins/cloudflare-agents` | Wraps AI-SDK-shaped tools' `execute` (enforce, run, scan the result, audit). `needsApproval(tool, input)` is a predicate for Cloudflare's confirmation prompt and is deliberately not auto-attached: a chat confirmation is not the governance approval, which only `gov.waitForApproval()` resolves. Web-standard only; a test walks the import graph and asserts no `node:` import. |
 
 ### Specialty
 
@@ -1015,6 +1192,9 @@ governance-sdk/audit-integrity             HMAC hash-chain primitives (createInt
 governance-sdk/audit-integrity-verify      standalone chain verifier (for offline audit)
 governance-sdk/agent-identity              HMAC identity tokens (deprecated — use agent-identity-ed25519)
 governance-sdk/agent-identity-ed25519      Ed25519 signing + verification
+governance-sdk/identity-jwt                external JWTs via JWKS (RS256 / ES256 / EdDSA; no HS*)
+governance-sdk/identity-spiffe             SPIFFE ID parsing + JWT-SVID verification
+governance-sdk/ext/identity                identityPlugin() — registers the verifier with the kernel
 governance-sdk/kill-switch                 priority-999 emergency halt
 
 # Standards / compliance
@@ -1022,6 +1202,10 @@ governance-sdk/compliance                  EU AI Act (6 articles + Omnibus-era d
 governance-sdk/owasp-agentic               OWASP Top 10 for Agentic Applications 2026 (ASI01–ASI10)
 governance-sdk/nist-ai-rmf                 NIST AI RMF (Govern/Map/Measure/Manage)
 governance-sdk/iso-42001                   ISO/IEC 42001 controls
+governance-sdk/nist-ai-600-1               NIST AI 600-1 GenAI Profile (19 subcategories, 12 risk roll-up)
+governance-sdk/csa-aicm                    CSA AI Controls Matrix v1.1 (18 domains, 10 scored)
+governance-sdk/imda-agentic                IMDA agentic framework v1.0 (four pillars)
+governance-sdk/ext/standards               all seven as plugins: allStandardsPlugins()
 
 # Storage
 governance-sdk/storage-postgres            PostgreSQL storage adapter
@@ -1035,9 +1219,10 @@ governance-sdk/otel-hooks                  governance-prefixed span shape (passi
 
 # Scanner + type surface
 governance-sdk/scanner-plugins             scanner plugin interface
-governance-sdk/token-types                 token type guards
 
-# Framework integrations (10 featured + MCP toolkit + Bedrock)
+# Framework integrations (10 featured + 2 agent runtimes + MCP toolkit + Bedrock)
+governance-sdk/plugins/claude-agent         # canUseTool + PreToolUse/PostToolUse hooks
+governance-sdk/plugins/cloudflare-agents    # governed tools for Cloudflare Agents (Workers-safe)
 governance-sdk/plugins/mastra
 governance-sdk/plugins/mastra-processor
 governance-sdk/plugins/vercel-ai
@@ -1062,8 +1247,8 @@ top-level package export — `import { runWithOutcome } from 'governance-sdk'`.
 ## Project Stats
 
 - **0** runtime dependencies
-- **1,837** tests, 0 failures (`npm test`)
-- **47** export paths — tree-shakeable, import only what you use
+- **2,099** tests, 0 failures (`npm test`)
+- **60** export paths — tree-shakeable, import only what you use
 - **TypeScript strict mode**, no `any` types in source
 - **MIT licensed**
 

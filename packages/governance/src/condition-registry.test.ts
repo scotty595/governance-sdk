@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { createPolicyEngine } from "./policy";
-import type { PolicyRule, EnforcementContext } from "./policy";
+import { createPolicyEngine } from "./policy-entry.js";
+import type { PolicyRule, EnforcementContext } from "./policy-entry.js";
 
 function makeCtx(overrides: Partial<EnforcementContext> = {}): EnforcementContext {
   return { agentId: "agent-1", action: "tool_call", ...overrides };

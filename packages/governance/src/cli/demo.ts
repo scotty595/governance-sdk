@@ -14,11 +14,11 @@
  */
 
 import { createGovernance } from "../index.js";
-import { blockTools, requireToolApproval, type EnforcementDecision } from "../policy.js";
-import { createInjectionGuard } from "../injection-detect.js";
-import { maskSensitiveOutput } from "../policy-presets-extended.js";
-import { verifyAuditIntegrity } from "../audit-integrity-verify.js";
-import type { ChainVerificationResult, IntegrityAuditEvent } from "../audit-integrity.js";
+import { blockTools, requireToolApproval, type EnforcementDecision } from "@governance-sdk/core/policy.js";
+import { createInjectionGuard } from "@governance-sdk/plugins/injection-detect.js";
+import { maskSensitiveOutput } from "@governance-sdk/core/policy-presets-extended.js";
+import { verifyAuditIntegrity } from "@governance-sdk/core/audit-integrity-verify.js";
+import type { ChainVerificationResult, IntegrityAuditEvent } from "@governance-sdk/core/audit-integrity.js";
 
 const AGENT_NAME = "support-bot";
 const SIGNING_KEY = "demo-signing-key-rotate-me";
@@ -155,9 +155,15 @@ export async function runDemo(print: Printer, opts: DemoOptions = {}): Promise<D
   const chain = bySequence(await gov.integrityChain!.export());
   const intact = await verifyAuditIntegrity(chain, SIGNING_KEY);
 
-  // Edit one event's payload without re-signing it.
+  // Edit one event's payload without re-signing it. The five steps above always
+  // chain more than four events; if an export ever came back short, say so
+  // rather than printing a "valid" verdict for a tamper that never landed.
   const edited = chain.map((e) => ({ ...e }));
-  edited[1] = { ...edited[1], detail: { ...(edited[1].detail ?? {}), tampered: true } };
+  const target = edited[1];
+  if (!target || chain.length < 4) {
+    throw new Error(`demo: audit chain has ${chain.length} events, need at least 4 to demonstrate tampering`);
+  }
+  edited[1] = { ...target, detail: { ...(target.detail ?? {}), tampered: true } };
   const editedResult = await verifyAuditIntegrity(edited, SIGNING_KEY);
 
   // Delete an event from the middle of the chain.

@@ -15,7 +15,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createGovernance } from "./index.js";
-import { verifyAuditIntegrity } from "./audit-integrity-verify.js";
+import { verifyAuditIntegrity } from "@governance-sdk/core/audit-integrity-verify.js";
 
 const KEY = "truncation-test-signing-key-32-bytes!!";
 

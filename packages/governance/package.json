@@ -15,8 +15,8 @@
       "import": "./dist/index.js"
     },
     "./policy": {
-      "types": "./dist/policy.d.ts",
-      "import": "./dist/policy.js"
+      "types": "./dist/policy-entry.d.ts",
+      "import": "./dist/policy-entry.js"
     },
     "./scorer": {
       "types": "./dist/scorer.d.ts",
@@ -126,6 +126,14 @@
       "types": "./dist/plugins/ollama.d.ts",
       "import": "./dist/plugins/ollama.js"
     },
+    "./plugins/claude-agent": {
+      "types": "./dist/plugins/claude-agent.d.ts",
+      "import": "./dist/plugins/claude-agent.js"
+    },
+    "./plugins/cloudflare-agents": {
+      "types": "./dist/plugins/cloudflare-agents.d.ts",
+      "import": "./dist/plugins/cloudflare-agents.js"
+    },
     "./owasp-agentic": {
       "types": "./dist/owasp-agentic.d.ts",
       "import": "./dist/owasp-agentic.js"
@@ -198,9 +206,49 @@
       "types": "./dist/injection-benchmark.d.ts",
       "import": "./dist/injection-benchmark.js"
     },
-    "./token-types": {
-      "types": "./dist/token-types.d.ts",
-      "import": "./dist/token-types.js"
+    "./conformance/agent-hooks": {
+      "types": "./dist/conformance/agent-hooks.d.ts",
+      "import": "./dist/conformance/agent-hooks.js"
+    },
+    "./plugin": {
+      "types": "./dist/plugin.d.ts",
+      "import": "./dist/plugin.js"
+    },
+    "./ext/standards": {
+      "types": "./dist/ext/standards-plugin.d.ts",
+      "import": "./dist/ext/standards-plugin.js"
+    },
+    "./ext/scoring": {
+      "types": "./dist/ext/scoring-plugin.d.ts",
+      "import": "./dist/ext/scoring-plugin.js"
+    },
+    "./ext/detect": {
+      "types": "./dist/ext/detect-plugin.d.ts",
+      "import": "./dist/ext/detect-plugin.js"
+    },
+    "./identity-jwt": {
+      "types": "./dist/identity-jwt.d.ts",
+      "import": "./dist/identity-jwt.js"
+    },
+    "./identity-spiffe": {
+      "types": "./dist/identity-spiffe.d.ts",
+      "import": "./dist/identity-spiffe.js"
+    },
+    "./ext/identity": {
+      "types": "./dist/ext/identity-plugin.d.ts",
+      "import": "./dist/ext/identity-plugin.js"
+    },
+    "./nist-ai-600-1": {
+      "types": "./dist/nist-ai-600-1.d.ts",
+      "import": "./dist/nist-ai-600-1.js"
+    },
+    "./csa-aicm": {
+      "types": "./dist/csa-aicm.d.ts",
+      "import": "./dist/csa-aicm.js"
+    },
+    "./imda-agentic": {
+      "types": "./dist/imda-agentic.d.ts",
+      "import": "./dist/imda-agentic.js"
     }
   },
   "files": [
@@ -213,7 +261,7 @@
     "build": "tsc && node scripts/fix-esm-imports.mjs",
     "dev": "tsc --watch",
     "test": "tsx --test src/*.test.ts src/**/*.test.ts",
-    "lint": "tsc --noEmit",
+    "lint": "tsc --noEmit && node ../../scripts/check-layering.mjs",
     "prepublishOnly": "node ../../scripts/sync-readme.mjs && tsc"
   },
   "keywords": [
@@ -280,22 +328,56 @@
     "pg": ">=8.0.0"
   },
   "peerDependenciesMeta": {
-    "@mastra/core": { "optional": true },
-    "ai": { "optional": true },
-    "langchain": { "optional": true },
-    "openai-agents": { "optional": true },
-    "pg": { "optional": true },
-    "@modelcontextprotocol/sdk": { "optional": true },
-    "@aws-sdk/client-bedrock-agent-runtime": { "optional": true },
-    "genkit": { "optional": true },
-    "llamaindex": { "optional": true },
-    "@anthropic-ai/sdk": { "optional": true },
-    "@mistralai/mistralai": { "optional": true },
-    "ollama": { "optional": true }
+    "@mastra/core": {
+      "optional": true
+    },
+    "ai": {
+      "optional": true
+    },
+    "langchain": {
+      "optional": true
+    },
+    "openai-agents": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "@aws-sdk/client-bedrock-agent-runtime": {
+      "optional": true
+    },
+    "genkit": {
+      "optional": true
+    },
+    "llamaindex": {
+      "optional": true
+    },
+    "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "@mistralai/mistralai": {
+      "optional": true
+    },
+    "ollama": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^25.4.0",
     "tsx": "^4.22.4",
     "typescript": "^5.7.0"
-  }
+  },
+  "dependencies": {
+    "@governance-sdk/core": "0.22.0",
+    "@governance-sdk/plugins": "0.22.0",
+    "@governance-sdk/adapters": "0.22.0"
+  },
+  "bundleDependencies": [
+    "@governance-sdk/core",
+    "@governance-sdk/plugins",
+    "@governance-sdk/adapters"
+  ]
 }

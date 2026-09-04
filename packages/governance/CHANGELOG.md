@@ -1,5 +1,185 @@
 # Changelog
 
+## [Unreleased] — Kernel and plugins: the restructure
+
+Splits the SDK into a kernel and the things that attach to it. Nothing about
+the public API changes: every existing export, subpath and behaviour is
+unchanged, and the full suite passes without a single test being rewritten to
+accommodate the move. See `docs/restructure-plan.md`.
+
+### Changed — the package split (phase B)
+
+- **Four packages.** `@governance-sdk/core` (the kernel, depends on nothing),
+  `@governance-sdk/plugins` (extensions), `@governance-sdk/adapters`
+  (framework adapters and the Agent Hooks surface), and `governance-sdk`, the
+  meta-package you install. The three scoped packages are `private: true`
+  under a placeholder scope; nothing new is publishable and renaming the scope
+  is one find-and-replace. All 48 subpaths 0.22.0 shipped keep working
+  through compatibility shims that say which package now owns each, and the
+  five phase A added (`plugin`, `conformance/agent-hooks`, `ext/*`) resolve
+  the same way.
+- **The kernel imports nothing from the extension layer.** Every layering
+  exception is gone: detection conditions, the sensitive-data evaluator and
+  its masker, tool-result scanning, the modality gate, and scoring all left
+  core. `createGovernanceKernel()` builds a bare kernel; `createGovernance()`
+  is that plus `defaultExtensions()`. `KernelExtensions` is deliberately
+  synchronous, unlike the plugin contract: a built-in condition must work on
+  the first `enforce()`, and `register()` returns a score, so neither can wait
+  on a promise.
+- **Scoring is a kernel extension.** A bare kernel's `register()` returns
+  level 0 labelled "Unscored" with an empty `dimensions` array — which cannot
+  be misread as a scorer that ran and found zeros — and `score()` /
+  `scoreFleet()` throw `NoScorerError` rather than returning `null` or an
+  empty summary, both of which already mean something else.
+- **The layering lint compares imports against declared dependencies**, per
+  package, rather than paths. It catches a dependency that only resolves
+  because npm hoisted it, and a test reaching across a boundary its package
+  does not declare. The scanner ignores comments and template literals; its
+  first run reported fifty violations that were `import` lines inside JSDoc
+  examples and the CLI's scaffold.
+- `tsconfig.base.json` holds the shared compiler settings; `tsc -b` builds the
+  packages in dependency order; `npm ci` → build → lint → test verified
+  against a clean tree.
+- **The published tarball is self-contained.** `npm run pack` stages the
+  three private packages inside `governance-sdk`'s tarball, because npm does
+  not bundle workspace links (declaring `bundleDependencies` alone yields a
+  package that installs and then fails on first `import`). `npm run
+  verify-pack` installs that tarball into a fresh project and imports every
+  subpath; CI and the release workflow run it, and the release publishes the
+  tarball rather than `npm publish -w`. An API-surface diff of every subpath
+  against 0.22.0 (`scripts/api-surface.mjs`) showed no runtime export removed
+  and one dropped type export at the root, `FailModes`, now restored. The
+  same diff extended to type text, plus a downstream consumer typechecked
+  against the tarball, found the kernel's `Modality` union had gained a
+  `"video"` member nothing implements — a break for any consumer that
+  switches over it exhaustively. Removed; the union is the four members
+  0.22.0 shipped.
+
+### Added — new surface (phase C)
+
+- **Claude Agent SDK adapter** (`governance-sdk/plugins/claude-agent`).
+  `canUseTool` and the `PreToolUse` / `PostToolUse` hooks decide every tool
+  call at the `process` stage and scan every tool result; a refusal is
+  returned as the SDK's own deny rather than thrown into its error path.
+  `preprocess()` / `postprocess()` are functions for the host's prompt and
+  final answer, since the SDK exposes no hook for those. The SDK is not
+  vendored, so the types describe its documented surface; a mismatch is a
+  compile error in `query({ options })`, never a bypass.
+- **Cloudflare Agents adapter** (`governance-sdk/plugins/cloudflare-agents`).
+  Wraps AI-SDK-shaped tools' `execute`; `needsApproval(tool, input)` is a
+  predicate for Cloudflare's confirmation prompt and is deliberately not
+  auto-attached, because a chat confirmation is not the governance approval.
+  Web-standard only, asserted by a test that walks the import graph.
+  `AgentFramework` gains `"cloudflare"`; a `Record<AgentFramework, …>` in
+  your code needs the new key.
+- **Adapter kernel: `decide()` and `notify()`.** `enforce()` fires the
+  outcome callbacks then throws; `enforceStage()` does neither; three
+  verdict-returning seams (`canUseTool`, the hook, Agent Hooks `preTool`)
+  each wanted callbacks without the throw and had reimplemented it. One
+  dispatch now owns which callback fires for which outcome.
+- **Three standards mappings** as modules and plugins: NIST AI 600-1
+  (`governance-sdk/nist-ai-600-1`: 19 subcategories with the twelve §2 GAI
+  risks rolled up; bias and environmental impact by attestation), CSA AI
+  Controls Matrix v1.1 (`governance-sdk/csa-aicm`: 18 domains enumerated, 10
+  scored, no individual control objective assessed because the spreadsheet is
+  gated, and the report says so) and IMDA's agentic framework
+  (`governance-sdk/imda-agentic`: v1.0, 17 requirements; v1.5 of May 2026 is
+  not yet diffed). `allStandardsPlugins()` returns seven. The NIST AI RMF
+  report's `scope` now points at the 600-1 mapping instead of calling it
+  roadmap.
+- **Externally issued identity.** `governance-sdk/identity-jwt` verifies
+  RS256, ES256 and EdDSA JWTs on Web Crypto with the algorithm fixed by the key
+  material (`HS*` and `none` cannot be enabled); `createJwksResolver()` is
+  bounded by key cap, TTL, per-`kid` cooldown, a refetch budget and request
+  coalescing. `governance-sdk/identity-spiffe` adds strict SPIFFE ID parsing
+  and JWT-SVID verification. `governance-sdk/ext/identity` registers a
+  verifier under `gov.getVerifier("identity")` that returns the exact context
+  fields `require_signed_identity` reads and writes an `identity_verification`
+  audit event carrying the delegation chain. X.509-SVIDs are not verified.
+- **`VerifierRegistry`.** `registerVerifier()` and `getVerifier()` are typed
+  through an open interface the registering plugin augments by declaration
+  merging, so importing the identity plugin is what makes
+  `getVerifier("identity")` typed. The kernel never imports a plugin's types.
+- Eight new subpaths, 60 export paths in total after the removal below. 2,099 tests.
+
+### Removed
+
+- **`governance-sdk/token-types`.** The Propolis → Honeycomb JWT shapes were
+  the internal contract of one Lua product, never used by the SDK, never
+  tested, and never an SDK concern; they are removed outright rather than
+  deprecated. Anyone who needs that token verified has it already: it is an
+  RS256 JWT with the agent id in `sub`, so `verifyJwt(token, {
+  capabilitiesClaim: "allowedTools", expectedIssuer, expectedAudience })` from
+  `governance-sdk/identity-jwt` covers it with the issuer's public key.
+
+### Added
+
+- **A plugin contract.** `gov.use(plugin)` / `unuse(id)` / `plugins()` /
+  `report(id, config)`. A plugin declares `{ id, version, requires, install,
+  uninstall }` and receives a `KernelHandle` — `registerCondition`,
+  `registerMaskStrategy`, `registerVerifier`, `registerReporter`, `addSink`,
+  the event stream, an audit writer and `failModes()` — and never the
+  instance, its storage or its rules. Installation is idempotent per id and
+  refuses a plugin whose `requires.core` range the kernel does not satisfy
+  (a dependency-free semver subset whose caret pins the minor below 1.0.0,
+  which is what a 0.x kernel needs).
+- **Every register verb returns a disposer**, and the registry records them
+  per plugin, so `unuse()` rolls a plugin back in full without the author
+  tracking anything — including restoring a built-in condition the plugin
+  overrode. A plugin's own `uninstall()` is now only for what the kernel never
+  saw. This came directly from the contract's first consumer, which could not
+  write an honest `uninstall()` against the first draft.
+- **Standards, scoring and detection ship as plugins**:
+  `governance-sdk/ext/{standards,scoring,detect}`. Each standards plugin
+  carries the revision it implements as its version, so OWASP's annual
+  revision and a regulator moving a date stop being kernel releases. The
+  direct exports (`mapToEuAiAct`, `assessAgent`, `detectInjection`) are
+  unchanged and additive.
+- **Agent Hooks conformance**: `governance-sdk/conformance/agent-hooks`
+  implements all eight interception points of the framework-neutral contract,
+  so a runtime that speaks it can drive this SDK. The contract's two lossy
+  edges are stated in the mapping: `require_approval` becomes a deny carrying
+  its approval id and poll URL, and `warn` becomes an allow carrying an
+  annotation.
+- **A shared adapter kernel.** `createAdapterCore` / `attachAdapterCore` own
+  registration, context assembly, enforcement, audit, provenance and the
+  enforce-run-audit wrapper. Every adapter now also gets consequence tiers
+  (`toolTiers`), taint propagation, and target path and URL extraction from
+  tool arguments — capabilities only the Mastra processor had.
+- **A layering lint** (`scripts/check-layering.mjs`, in `npm run lint`)
+  enforcing that core imports neither adapters nor ext, by logical membership
+  rather than by directory, so the rule bites before the packages exist. Eight
+  real violations are recorded with the phase that removes each; the lint fails
+  on a new one and on an exception that no longer matches a real import.
+- `InjectionDetectorConfig.patterns` replaces the built-in corpus outright,
+  which is what a caller swapping in their own detector needs;
+  `customPatterns` still adds to it. `extractStrings` is exported so an
+  overriding condition uses the same input walk as the built-in.
+
+### Fixed
+
+- **`verifyAuditIntegrity` and `AuditIntegrity.verify` threw a `TypeError` on
+  a sparse, null-holed or undated chain** instead of reporting a break. A
+  verifier that crashes on a tampered export is indistinguishable from one
+  with no opinion. Both now return a break at the offending index.
+- Nine adapters' private scaffolds are gone — eight copies of
+  `buildRegistration`, nine each of `createEnforcer` and `createAuditor`, four
+  of `createResultScanner`, six of `contentToText`, seven of
+  `extractLastUserText`, six of `replaceLastUserText`, 851 lines in all. That
+  duplication is what let nine adapters drift onto `agentLevel: 0`.
+- The ReDoS guard asserted a wall-clock budget, which measured machine
+  contention as much as the code and failed only under a loaded suite. It now
+  asserts that cost stays linear in input size, which survives load and fails
+  on a quadratic pattern even on fast hardware.
+
+### Changed
+
+- `index.ts` split into `audit-chain.ts`, `scoring-hooks.ts` and
+  `fail-modes.ts` (1,141 lines to 869). `packages/governance/src/plugins/`
+  gained `adapter-core.ts` and `text-extract.ts`.
+- `noUnusedLocals` is on. Every adapter file is under the 300-line rule,
+  including the three that were over it.
+
 ## [0.22.0] - 2026-09-04 — Kernel hardening, fail-closed defaults, tiers and provenance
 
 Closes the four high-severity findings from the September 2026 review and the

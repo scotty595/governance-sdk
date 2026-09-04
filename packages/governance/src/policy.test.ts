@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { createPolicyEngine } from "./policy";
-import type { PolicyRule, EnforcementContext, PolicyCondition } from "./policy";
+import { createPolicyEngine } from "./policy-entry.js";
+import type { PolicyRule, EnforcementContext, PolicyCondition } from "./policy-entry.js";
 
 function makeRule(overrides: Partial<PolicyRule> = {}): PolicyRule {
   return {

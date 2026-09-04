@@ -55,22 +55,33 @@ jobs:
           echo "✓ Tag v$TAG matches governance-sdk version $PKG_VERSION"
       - run: npm run build
       - run: npm test
+      # governance-sdk depends on three private workspace packages, and npm
+      # does not bundle workspace links, so the publishable artifact is the
+      # self-contained tarball scripts/pack-meta.mjs stages — never
+      # `npm publish -w packages/governance`. verify-pack installs that
+      # tarball into a fresh project and imports every subpath.
+      - run: npm run verify-pack
 
       - name: Publish packages to npm (skip already-published versions)
         if: env.PUBLISH_NPM == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          for pkg in governance governance-platform; do
-            PKG_NAME=$(node -p "require('./packages/$pkg/package.json').name")
-            PKG_VERSION=$(node -p "require('./packages/$pkg/package.json').version")
-            if npm view "$PKG_NAME@$PKG_VERSION" version 2>/dev/null; then
-              echo "⏭ $PKG_NAME@$PKG_VERSION already published, skipping"
+          set -euo pipefail
+          publish_if_new() {  # <name> <version> <publish args...>
+            local name="$1" version="$2"; shift 2
+            if npm view "$name@$version" version 2>/dev/null; then
+              echo "⏭ $name@$version already published, skipping"
             else
-              echo "📦 Publishing $PKG_NAME@$PKG_VERSION"
-              npm publish -w "packages/$pkg" --access public --provenance
+              echo "📦 Publishing $name@$version"
+              npm publish "$@" --access public --provenance
             fi
-          done
+          }
+          SDK_VERSION=$(node -p "require('./packages/governance/package.json').version")
+          publish_if_new governance-sdk "$SDK_VERSION" "dist/governance-sdk-$SDK_VERSION.tgz"
+          PLATFORM_NAME=$(node -p "require('./packages/governance-platform/package.json').name")
+          PLATFORM_VERSION=$(node -p "require('./packages/governance-platform/package.json').version")
+          publish_if_new "$PLATFORM_NAME" "$PLATFORM_VERSION" -w packages/governance-platform
 
       - name: npm publish paused
         if: env.PUBLISH_NPM != 'true'

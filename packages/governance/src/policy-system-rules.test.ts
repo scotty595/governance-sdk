@@ -11,8 +11,8 @@
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert";
 import { createGovernance, createPolicyEngine, MAX_USER_PRIORITY, blockTools } from "./index.js";
-import { createKillSwitch } from "./kill-switch.js";
-import type { PolicyRule } from "./policy.js";
+import { createKillSwitch } from "@governance-sdk/core/kill-switch.js";
+import type { PolicyRule } from "@governance-sdk/core/policy.js";
 
 const allowAll = (id: string, priority: number): PolicyRule => ({
   id,

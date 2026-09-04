@@ -1,0 +1,138 @@
+/**
+ * governance-sdk — Standalone audit-chain verifier
+ *
+ * Verifies a snapshot of integrity-wrapped audit entries without needing a
+ * live {@link IntegrityAudit} instance. Useful for offline audit: export
+ * the chain via `integrityAudit.export()`, ship the JSON somewhere else,
+ * re-verify with this function + the shared signing secret.
+ *
+ * Detects:
+ *   - content edits (hash mismatch on a given entry)
+ *   - entry deletion (broken `previousHash` linkage, sequence gap)
+ *   - entry reordering (sequence numbers mismatch reconstruction)
+ *   - forged insertions without the secret (hash recomputation fails)
+ *
+ * Does NOT detect:
+ *   - rollback to an earlier valid checkpoint (requires an external anchor)
+ *   - forgery by anyone who holds the signing secret (plain HMAC chains are
+ *     only tamper-evident to holders of the key — use key rotation + pair
+ *     with an external anchor if you need defence in depth)
+ */
+
+import {
+  GENESIS_HASH,
+  canonicalize,
+  constantTimeEqualHex,
+  hmacSha256,
+  type ChainVerificationResult,
+  type IntegrityAuditEvent,
+} from "./audit-integrity.js";
+
+/**
+ * Structural check on one caller-supplied chain entry.
+ *
+ * `entries` is whatever the caller loaded — an exported chain that may have
+ * been truncated, hand-edited, or round-tripped through JSON. A hole in a
+ * sparse array spreads to `undefined`, `JSON.parse` happily produces `null`,
+ * and a hand-edited entry can be missing `createdAt` entirely. Any of those
+ * would throw inside the sort comparator below, turning a damaged chain into
+ * a crash instead of a verification failure.
+ */
+function isChainEntry(value: unknown): value is IntegrityAuditEvent {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "createdAt" in value &&
+    typeof value.createdAt === "string"
+  );
+}
+
+export async function verifyAuditIntegrity(
+  entries: IntegrityAuditEvent[],
+  signingKey: string,
+): Promise<ChainVerificationResult> {
+  // Reject a damaged array before sorting it. An empty chain is legal (it
+  // verifies trivially); a chain with a hole in it is not.
+  const supplied: readonly unknown[] = entries;
+  const dense: IntegrityAuditEvent[] = [];
+  for (let i = 0; i < supplied.length; i++) {
+    const entry = supplied[i];
+    if (!isChainEntry(entry)) {
+      return broken(
+        i,
+        supplied.length,
+        `Entry at position ${i} is missing or is not an audit event — chain is damaged (deletion or truncation)`,
+      );
+    }
+    dense.push(entry);
+  }
+
+  // Order by sequence, not createdAt: the sequence is allocated under the
+  // chain's write lock and is HMAC-covered, so it IS the chain order. Wall
+  // clocks are stamped before the lock and can disagree with it (lock-wait
+  // inversion under concurrent writers, cross-process clock skew) — sorting
+  // by createdAt would report a valid chain as tampered. A forged sequence
+  // still fails the hash/previousHash checks below.
+  const sorted = dense.sort((a, b) => {
+    const sa = a.integrity?.sequence;
+    const sb = b.integrity?.sequence;
+    if (sa != null && sb != null && sa !== sb) return sa - sb;
+    return a.createdAt.localeCompare(b.createdAt);
+  });
+
+  let currentPreviousHash = GENESIS_HASH;
+  let seq = 0;
+
+  // `sorted` is dense by construction (built by push above), so `entries()`
+  // hands us a real event on every iteration.
+  for (const [i, event] of sorted.entries()) {
+    if (!event.integrity || typeof event.integrity.hash !== "string") {
+      return broken(i, sorted.length, `Event ${event.id} missing integrity metadata`);
+    }
+    seq++;
+    if (event.integrity.sequence !== seq) {
+      return broken(
+        i,
+        sorted.length,
+        `Sequence gap at position ${i}: expected sequence ${seq}, got ${event.integrity.sequence} (reordering or deletion)`,
+      );
+    }
+    if (!constantTimeEqualHex(event.integrity.previousHash, currentPreviousHash)) {
+      return broken(
+        i,
+        sorted.length,
+        `Chain break at sequence ${seq}: expected previousHash ${currentPreviousHash.slice(0, 12)}..., got ${event.integrity.previousHash.slice(0, 12)}...`,
+      );
+    }
+    const canonical = canonicalize(event, currentPreviousHash, seq);
+    const expectedHash = await hmacSha256(signingKey, canonical);
+    if (!constantTimeEqualHex(expectedHash, event.integrity.hash)) {
+      return broken(
+        i,
+        sorted.length,
+        `Hash mismatch at sequence ${seq}: event ${event.id} content has been modified`,
+      );
+    }
+    currentPreviousHash = event.integrity.hash;
+  }
+
+  return {
+    valid: true,
+    eventsVerified: sorted.length,
+    totalEvents: sorted.length,
+    brokenAt: null,
+    breakDetail: null,
+    verifiedAt: new Date().toISOString(),
+  };
+}
+
+function broken(i: number, total: number, detail: string): ChainVerificationResult {
+  return {
+    valid: false,
+    eventsVerified: i,
+    totalEvents: total,
+    brokenAt: i,
+    breakDetail: detail,
+    verifiedAt: new Date().toISOString(),
+  };
+}

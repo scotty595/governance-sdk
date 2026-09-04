@@ -18,6 +18,41 @@ guarantee names the test file that asserts it.
 | Every non-allow decision names the stage, the condition type and, for built-in conditions, a one-line remedy. | `policy-remedies.ts` | `policy-decision-detail.test.ts` |
 | First match wins. Rules are evaluated in descending priority; ties keep insertion order. No combination of outcomes. | `policy.ts` | `policy.test.ts` |
 
+## Plugins and conformance
+
+| Guarantee | Enforced by | Asserted in |
+|---|---|---|
+| `gov.use()` is idempotent per plugin id, and refuses a second version of an installed id rather than silently keeping either. | `plugin.ts` | `plugin.test.ts` |
+| A plugin whose `requires.core` range this kernel does not satisfy, or that requires a capability the kernel lacks, is refused at install time. | `plugin.ts` | `plugin.test.ts` |
+| A plugin receives a `KernelHandle` with five registration verbs, the event stream, an audit writer and `failModes()` — never the instance, its storage or its rules. Every register verb returns a disposer, and `unuse()` rolls a plugin back in full, including restoring a built-in condition it overrode. | `plugin.ts` | `plugin.test.ts` |
+| A condition a plugin registers is validated exactly like a built-in, so a rule naming it before the plugin is installed is rejected when the rule is added. | `policy-validate.ts` | `plugin.test.ts` |
+| `getVerifier(kind)` is typed through `VerifierRegistry`, which the registering plugin augments; the kernel never imports a plugin's types, and a host that has not imported the plugin sees `unknown`. | `plugin.ts`, `ext/identity-plugin.ts` | `tsc -b` (compile-time) |
+| An audit sink receives every event after it is written and chained. A sink that throws or rejects is routed to `onAuditError` and cannot change a decision. | `governance.ts`, `audit-chain.ts` | `plugin.test.ts` |
+| A `mask` rule on a condition with no registered mask strategy still fails closed to `block`. | `policy.ts` | `plugin.test.ts` |
+| All eight Agent Hooks interception points are implemented, and every SDK outcome maps to a defined verdict. | `conformance/agent-hooks.ts` | `conformance/agent-hooks.test.ts` |
+| `preTool` returns a deny verdict rather than throwing; `postTool` hands back the substituted payload, never the original poisoned value. | `conformance/agent-hooks.ts` | `conformance/agent-hooks.test.ts` |
+
+Not guaranteed, and stated in the mapping itself: Agent Hooks has no state
+between allow and deny, so `require_approval` arrives as a deny carrying its
+approval id and poll URL, and `warn` arrives as an allow carrying an
+annotation. A host that ignores annotations loses the warning. That is a
+property of the contract, not of this implementation.
+
+## Layering
+
+The SDK is four packages, and the layering rule is a build constraint rather
+than a convention.
+
+| Guarantee | Enforced by | Asserted in |
+|---|---|---|
+| `@governance-sdk/core` declares no dependencies and imports none. It contains no detector, no pattern corpus, no standards mapping and no scoring model; those reach it as kernel extensions or plugins. | `packages/core/package.json`, `tsc -b` project references | `scripts/check-layering.mjs` in `npm run lint` |
+| Every cross-package import is declared in that package's `dependencies`, so nothing resolves only because npm hoisted it. | `scripts/check-layering.mjs` | `npm run lint` in CI |
+| A test may reach the assembled system (`governance-sdk`) only as a devDependency, never as a runtime one. Tests are excluded from the build graph, which is exactly where a boundary would otherwise rot unnoticed. | `scripts/check-layering.mjs` | `npm run lint` in CI |
+| `createGovernanceKernel()` with no extensions says what it lacks: a rule naming an unregistered condition is rejected when added, a mask with no strategy fails closed to `block`, `register()` returns level 0 labelled "Unscored" with an empty `dimensions` array, and `score()` / `scoreFleet()` throw `NoScorerError`. | `packages/core/src/governance.ts` | `governance-edge.test.ts`, `plugin.test.ts` |
+| `createGovernance()` and the `governance-sdk/policy` subpath install the default extension set, so every documented built-in behaves as before. All 60 subpaths resolve from the built output. | `packages/governance/src/index.ts`, `policy-entry.ts` | `index.test.ts`, the root `npm test` |
+| The `governance-sdk` tarball installs on its own: the three private packages are staged inside it, and installing it into a fresh project outside the workspace imports every subpath and runs the kernel, a standards report and the identity plugin. npm does not bundle workspace links, so `npm publish -w` would ship a package that installs and then fails on first import. | `scripts/pack-meta.mjs`, `bundleDependencies` | `scripts/verify-pack.mjs` in CI and the release workflow |
+| The public API of every subpath is compared against the previous release before a restructure merges: exported symbol names, kinds and resolved type text (so a widened union or a changed signature is a reported change), resolved through `export *`, plus runtime keys. A real downstream consumer is typechecked and tested against the packed tarball. | `scripts/api-surface.mjs`, `scripts/api-diff.mjs`, `CONTRIBUTING.md` → Checking a refactor | run by hand against a `main` worktree; results in the PR |
+
 ## Kill switch
 
 | Guarantee | Enforced by | Asserted in |
@@ -97,11 +132,18 @@ Hosted mode never consults the ledger.
 | Ed25519 identity tokens are verified for signature, expiry (60 s skew), optional audience and issuer, optional key pinning (single key, key set, or resolver by `kid`), and optional replay (`jti`) through a pluggable store. | `agent-identity-ed25519-token.ts` | `agent-identity-ed25519-token.test.ts` |
 | Delegated certificates carry a capability subset of their parent and inherit its expiry; verification of a delegated certificate requires the issuer's public key. | `agent-identity-ed25519.ts` | `agent-identity-ed25519.test.ts` |
 | HMAC identity tokens (`agent-identity`, deprecated) sign every claim including expiry, compare in constant time, and reject v1 tokens. | `agent-identity.ts` | `agent-identity.test.ts` |
+| Externally issued JWTs are verified on Web Crypto only, for RS256, ES256 and EdDSA. The algorithm is derived from the key material, never from the token header or the JWK's `alg`, so one key verifies exactly one algorithm; `HS*` and `none` are rejected and there is no option to enable them. | `identity-jwt.ts`, `identity-jwt-keys.ts` | `identity-jwt.test.ts` |
+| JWT verification checks `exp` (required unless `requireExpiry: false`), `nbf`, `iat`, issuer, audience, replay by `jti` through the pluggable store, and rejects unsupported `crit` headers, with a 60 s default skew. | `identity-jwt-claims.ts` | `identity-jwt-claims.test.ts` |
+| The JWKS resolver is bounded: a key cap, a TTL, a cooldown per unknown `kid`, a rolling refetch budget and coalesced concurrent misses. A caller choosing `kid` values cannot drive fetches to the IdP, and a failing IdP's error, not "unknown kid", is what callers see meanwhile. | `identity-jwks.ts` | `identity-jwks.test.ts` |
+| A JWT-SVID must carry an audience and a workload SPIFFE ID whose trust domain is one you named; `parseSpiffeId()` rejects every form the SPIFFE ID spec forbids (scheme, userinfo, port, query, fragment, relative segments, percent-encoding, length). | `identity-spiffe.ts` | `identity-spiffe.test.ts` |
+| `identityPlugin()` registers under `getVerifier("identity")`, returns exactly the context fields `require_signed_identity` reads, refuses a tool the token's capabilities do not cover, and writes an `identity_verification` audit event carrying the delegation chain (`act`, `azp`, `actor`). A verifier that throws is reported as a failed check, never as a verified one. | `ext/identity-plugin.ts` | `ext/identity-plugin.test.ts` |
 
-Not guaranteed: the SDK does not run the vault lookup. `requireSignedIdentity()`
-reads `ctx.identityVerified`, which your host sets after calling
-`verifyAgentIdentity()`. Self-issued tokens are not interoperable with Entra,
-Okta, Auth0 or SPIFFE identities; verifiers for those are planned.
+Not guaranteed: the SDK does not run the vault lookup, and the kernel does not
+call the verifier during `enforce()` — the policy engine is synchronous and
+cannot fetch a JWKS mid-evaluation. `requireSignedIdentity()` reads
+`ctx.identityVerified`, which your host sets from `check.context` (external
+identity) or after calling `verifyAgentIdentity()` (self-issued). X.509-SVIDs
+are not verified: Web Crypto has no certificate-chain validation.
 
 ## Hosted mode
 

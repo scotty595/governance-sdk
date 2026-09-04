@@ -1,8 +1,11 @@
 # Restructure plan: kernel and plugins
 
-Status: **plan, not started.** This document closes the hardening roadmap and
-opens the next one. Nothing here changes behaviour; it changes where code
-lives, how it is versioned, and what the SDK promises to keep stable.
+Status: **implemented — phases A, B and C landed.** This document closed the
+hardening roadmap and opened this one; the status table under each phase
+records what actually shipped and where it diverged from what was planned.
+Phases A and B changed where code lives, how it is versioned, and what the
+SDK promises to keep stable, without changing behaviour. Phase C added
+surface on top of that.
 
 ## Why
 
@@ -18,7 +21,8 @@ shape of the problem clear:
   bug is structural, not accidental, as long as each adapter re-declares the
   same scaffold (nine copies of `createEnforcer` and `createAuditor`, eight of
   `buildRegistration`, six each of the text extractors).
-- The four standards mappings revise on four external clocks. OWASP is annual.
+- The standards mappings (four when this was written, seven now) revise on
+  external clocks. OWASP is annual.
   The EU moved a date by sixteen months with one regulation. ISO 27090 and
   27091 publish this year. Coupling those to the core's semver means a core
   release for a date change, or a stale core.
@@ -88,8 +92,8 @@ export), `scoring-hooks.ts` (the behavioural re-score), `fail-modes.ts`.
   path. Deprecate for two minors, then remove.
 - `mcp-call-recorder` and `mcp-chain-audit` as separate exports: fold into
   one MCP plugin.
-- `token-types` (Lua-internal JWT shapes) and `scanner-plugins` as public
-  subpaths: internal.
+- `token-types` (the JWT shapes of one Lua-internal product, never used by
+  the SDK): remove outright. `scanner-plugins` as a public subpath: internal.
 - `agent-identity` (HMAC): already deprecated; removal at the split's second
   minor.
 - `injection-benchmark` as a production export: moves to `research/`.
@@ -197,6 +201,41 @@ This single rule is what stops the kernel from silently re-growing.
 
 ### Phase A — in-place (no import changes) · 2–3 weeks
 
+**Status: done.** All five steps landed. What is true on the branch:
+
+| Step | State | Evidence |
+|---|---|---|
+| 1. `gov.use()` and `KernelHandle` | done | `src/plugin.ts`, `src/plugin.test.ts`, `src/ext/**` (standards, scoring, detection ported onto it) |
+| 2. Adapter kernel, adapters ported | done, wider than planned | `src/plugins/adapter-core.ts`, `text-extract.ts`; all ten adapters and nine wrappers ported, 851 lines deleted |
+| 3. `index.ts` split | done | `audit-chain.ts`, `scoring-hooks.ts`, `fail-modes.ts`; index.ts 1,141 → 869 |
+| 4. Layering lint | done | `scripts/check-layering.mjs`, wired into `npm run lint` |
+| 5. Stricter tsconfig | done | `noUnusedLocals` and `noUncheckedIndexedAccess` on in `tsconfig.base.json`; the last of the 163 findings were two real bugs (see the 0.22 changelog) |
+
+Phase B step 7 ("port the remaining adapters") was absorbed into Phase A step
+2, because porting four adapters and leaving six on the old scaffold would
+have meant maintaining both shapes across the package move.
+
+Three things the work changed about the plan itself:
+
+- **The layering rule is enforced by logical membership, not by directory.**
+  Waiting for the package split to enforce it would have meant discovering the
+  coupling during the move. `LOGICAL_EXT` in the lint names the files that are
+  destined for `ext` while they still sit in the core directory, so the rule
+  bites today. Eight real violations are recorded with the phase that removes
+  each; the lint fails on a new one *and* on an exception that no longer
+  matches a real import.
+- **A public barrel re-exporting `ext` is the design, not a violation.** That
+  is exactly what the `governance-sdk` meta-package becomes. The lint checks
+  real imports in `index.ts` but allows `export ... from`.
+- **The contract needed disposers, and its first consumer proved it.** The
+  draft in this document gave plugins five register verbs and no way to undo
+  any of them, so `uninstall()` could not be honest and the documented
+  "unuse then reinstall at a new version" flow threw. Every register verb now
+  returns a disposer and the registry rolls them back automatically. The rule
+  that produced this — anything a plugin needs that is not on the handle is a
+  kernel feature request, not a cast — is the reason it surfaced as a design
+  question rather than as five casts in a plugin.
+
 1. Add `gov.use()` and `KernelHandle` to the current package. Port the
    standards mappings, scoring and detection to register through it, inside
    the same package. Root exports keep working.
@@ -213,6 +252,57 @@ Exit criteria: all tests green, `governance-sdk` public API unchanged,
 kernel files under 4k lines, no adapter over 250 lines among the four ported.
 
 ### Phase B — packages · 2 weeks
+
+**Status: done.** The packages exist, every test passes, and the layering rule
+is now a build constraint rather than a lint over paths.
+
+| Package | Depends on | Source files | Tests |
+|---|---|---|---|
+| `@governance-sdk/core` (private) | nothing | 34 | 345 |
+| `@governance-sdk/plugins` (private) | core | 48 | 867 |
+| `@governance-sdk/adapters` (private) | core, plugins | 45 | 435 |
+| `governance-sdk` (publishable) | all three | 5 + 51 compatibility shims | 303 |
+
+Six things the move taught, beyond what the plan anticipated:
+
+- **The meta-package was uninstallable, and no test could see it.** Its
+  dependencies are three private packages, and npm does not bundle workspace
+  links — `bundleDependencies` produces the same tarball and then makes
+  `npm install` succeed and the first `import` fail. Every workspace test
+  resolved through symlinks and passed. The fix is a staged, self-contained
+  tarball (`scripts/pack-meta.mjs`) and a check that installs it into a
+  fresh project and imports every subpath (`scripts/verify-pack.mjs`), both
+  in CI and the release workflow. The same check found a report crashing on
+  an agent row without `tools`. An API-surface diff against `main`
+  (`scripts/api-surface.mjs`) found one dropped type export at the root.
+- **A name-level API diff misses a widened union.** The split rewrote the
+  kernel's `Modality` with a fifth member, `"video"`, that nothing
+  implements. Every name still resolved and the symbol diff was clean; the
+  first real consumer typechecked against the packed tarball failed, because
+  it switches over that union exhaustively. The surface dump now records each
+  export's resolved type text, so a changed union or signature is a reported
+  change, and typechecking a downstream consumer against the tarball is on the
+  pre-merge checklist (`CONTRIBUTING.md` → Checking a refactor).
+
+- **The lint changed job and got stronger.** It no longer compares paths; it
+  compares what a package *imports* against what it *declares*. That catches
+  two things `tsc` cannot: a dependency that only resolves because npm hoisted
+  it, and a test reaching across a boundary its package does not declare —
+  and tests are exactly where a boundary quietly rots, because they are
+  excluded from the build graph.
+- **Tests belong with the code they exercise, not the file they are named
+  after.** Eleven tests named for kernel modules were really testing the
+  detector or the standards mappings, and the package boundary is what forced
+  that admission. A test of the assembled system legitimately imports the
+  meta-package, as a devDependency — the lint permits exactly that and nothing
+  else.
+- **The scanner has to ignore comments and template literals.** The first run
+  reported fifty violations that were `import` lines inside JSDoc examples and
+  inside the scaffold the CLI writes into a user's project.
+- **`@governance-sdk/*` is a placeholder scope, and every package under it is
+  `private: true`.** Nothing new is publishable; `governance-sdk` remains the
+  only publishable unit, and renaming the scope later is one find-and-replace
+  because nothing ships under it.
 
 5. Create `packages/core`, `packages/adapters`, `packages/plugins`; move files;
    turn `packages/governance` into the meta-package with re-exports and
@@ -234,13 +324,40 @@ re-exports pass the existing test suite unchanged.
     SPIFFE SVIDs; delegation claims (`actor`, `principal`) carried into audit
     events.
 
+**Status: done.** Every step landed; two of them narrower than written, and
+both say so in their module headers and report text.
+
+| Step | State | Evidence |
+|---|---|---|
+| 8. Claude Agent SDK and Cloudflare Agents adapters | done | `packages/adapters/src/plugins/claude-agent.ts`, `cloudflare-agents.ts`; both in `adapter-parity.test.ts`. Neither SDK is vendored, so the types describe the documented surface; a mismatch is a compile error in the host, never a bypass. |
+| 9. Agent Hooks conformance | done | `packages/adapters/src/conformance/agent-hooks.ts` and its suite, run by `npm test` on every CI push |
+| 10. NIST AI 600-1, CSA AICM v1.1, IMDA agentic | done, CSA narrower | `nist-ai-600-1.ts`, `csa-aicm.ts`, `imda-agentic.ts` plus `standards-rollup.ts`; `allStandardsPlugins()` returns seven. CSA scores 10 of 18 domains because the control objectives are gated. IMDA maps v1.0; v1.5 (May 2026) has the same structure and is not yet diffed. Each report carries a revision and its source URLs. |
+| 11. External identity | done, X.509 excluded | `identity-jwt.ts`, `identity-jwt-keys.ts`, `identity-jwt-claims.ts`, `identity-jwks.ts`, `identity-spiffe.ts`, `ext/identity-plugin.ts`. RS256 / ES256 / EdDSA on Web Crypto; `HS*` deliberately not enableable. Delegation (`act`, `azp`, `actor`) lands in `identity_verification` audit events. X.509-SVIDs need chain validation Web Crypto does not provide. |
+
+Two things this phase changed about the kernel, both because a second
+consumer asked for them:
+
+- **The adapter kernel gained `decide()` and `notify()`.** `enforce()`
+  couples the outcome callbacks to throwing and `enforceStage()` fires none;
+  `canUseTool`, the `PreToolUse` hook and Agent Hooks all wanted the middle,
+  and each had reimplemented it. One dispatch now decides which callback fires
+  for which outcome, and the two entry points differ only in whether they
+  throw.
+- **`VerifierRegistry` types `getVerifier()`.** The kernel declares an open
+  interface; the plugin that registers a verifier augments it by declaration
+  merging. A host that imports the identity plugin gets a typed
+  `getVerifier("identity")`; one that does not gets `unknown`. The kernel
+  never learns a plugin's types, which is the layering rule applied to the
+  type level.
+
 ### Deprecation timeline
 
 | Item | Deprecated at | Removed at |
 |---|---|---|
 | `governance-sdk/plugins/mastra` (middleware) | split | split + 2 minors |
 | `governance-sdk/agent-identity` (HMAC) | now (0.22) | split + 2 minors |
-| `governance-sdk/token-types`, `scanner-plugins` subpaths | split | split + 2 minors |
+| `governance-sdk/token-types` | — | removed in phase C: Lua-internal and unused; `identity-jwt` verifies that token format if anyone needs it |
+| `governance-sdk/scanner-plugins` subpath | split | split + 2 minors |
 | `governance-sdk/injection-benchmark` | split | split + 1 minor (moves to `research/`) |
 | `mlInjectionScore` alias | now (0.22) | 1.0 |
 | Every `governance-sdk/*` subpath (meta-package) | split | not before 1.0; re-exports stay |
@@ -262,7 +379,13 @@ re-exports pass the existing test suite unchanged.
 ## Acceptance criteria for the restructure as a whole
 
 - `packages/core` under 4k lines, zero runtime deps, zero imports from
-  adapters or plugins (lint-enforced).
+  adapters or plugins (lint-enforced). **Measured after the index.ts split:
+  4,341 lines across 17 files.** The overshoot is the eight recorded layering
+  exceptions — the detector, the mask corpus and the scorer are still reachable
+  from core. Moving them in Phase B is what brings the number down; shaving
+  lines any other way would be gaming the measure. **Resolved: the kernel is
+  now `@governance-sdk/core`, which depends on nothing and contains 34 source
+  files. Every exception is gone, not deferred.**
 - Every adapter passes the parity test; maintained-tier adapters under 200
   lines each.
 - `governance-sdk` meta-package: today's full test suite passes against the

@@ -5,7 +5,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { createGovernance, blockTools } from "./index.js";
-import type { GovernanceEvent } from "./events.js";
+import type { GovernanceEvent } from "@governance-sdk/core/events.js";
 
 describe("events and metrics", () => {
   it("emits enforcement, registration and policy events", async () => {

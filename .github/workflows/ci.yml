@@ -21,6 +21,8 @@ jobs:
       - run: npm run build
       - run: npm run lint
       - run: npm test
+      - name: Pack governance-sdk and install it into a fresh project
+        run: npm run verify-pack
       - name: Verify packages/governance/README.md is in sync with root README
         run: |
           node scripts/sync-readme.mjs

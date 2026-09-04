@@ -1,0 +1,247 @@
+/**
+ * governance-sdk — Ed25519 Cryptographic Agent Identity
+ *
+ * Public-key agent identity using Ed25519 via Web Crypto API.
+ * Zero dependencies. Supports key generation, action signing, verification,
+ * self-signed certificates, and capability-narrowing delegation.
+ *
+ * @example
+ * ```ts
+ * import { createEd25519Identity } from 'governance-sdk/agent-identity-ed25519';
+ *
+ * const identity = createEd25519Identity();
+ * const keyPair = await identity.generateKeyPair();
+ * const cert = await identity.createCertificate(keyPair.privateKey, {
+ *   agentId: 'bot-1', name: 'sales-bot', capabilities: ['search', 'email'],
+ * });
+ * const signature = await identity.signAction(keyPair.privateKey, { action: 'tool_call', tool: 'search' });
+ * const valid = await identity.verifyAction(keyPair.publicKey, { action: 'tool_call', tool: 'search' }, signature);
+ * ```
+ */
+
+import { deepSortKeys } from "@governance-sdk/core/audit-integrity.js";
+
+// ─── Types ───────────────────────────────────────────────────
+
+export interface Ed25519KeyPair {
+  publicKey: CryptoKey;
+  privateKey: CryptoKey;
+  /** Hex-encoded public key for storage/transmission */
+  publicKeyHex: string;
+}
+
+export interface AgentCertificate {
+  agentId: string;
+  name: string;
+  publicKeyHex: string;
+  capabilities: string[];
+  issuedAt: string;
+  expiresAt?: string;
+  issuer?: string;
+  delegationDepth: number;
+  signature: string;
+}
+
+export interface DelegatedIdentity {
+  keyPair: Ed25519KeyPair;
+  certificate: AgentCertificate;
+}
+
+export interface Ed25519Config {
+  /** Certificate expiry in ms (default: 24 hours) */
+  certificateTtlMs?: number;
+  /** Maximum delegation depth (default: 5) */
+  maxDelegationDepth?: number;
+}
+
+// ─── Implementation ─────────────────────────────────────────
+
+export function createEd25519Identity(config: Ed25519Config = {}) {
+  const { certificateTtlMs = 86_400_000, maxDelegationDepth = 5 } = config;
+
+  return {
+    /** Generate a new Ed25519 key pair */
+    async generateKeyPair(): Promise<Ed25519KeyPair> {
+      const keyPair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+      const rawPublic = await crypto.subtle.exportKey("raw", keyPair.publicKey);
+      const publicKeyHex = bufToHex(new Uint8Array(rawPublic));
+      return { publicKey: keyPair.publicKey, privateKey: keyPair.privateKey, publicKeyHex };
+    },
+
+    /** Sign an action context with the agent's private key */
+    async signAction(privateKey: CryptoKey, data: Record<string, unknown>): Promise<string> {
+      const canonical = JSON.stringify(deepSortKeys(data));
+      const encoded = new TextEncoder().encode(canonical);
+      const sig = await crypto.subtle.sign("Ed25519", privateKey, encoded.buffer as ArrayBuffer);
+      return bufToHex(new Uint8Array(sig));
+    },
+
+    /** Verify an action signature with the agent's public key */
+    async verifyAction(publicKey: CryptoKey, data: Record<string, unknown>, signature: string): Promise<boolean> {
+      const canonical = JSON.stringify(deepSortKeys(data));
+      const encoded = new TextEncoder().encode(canonical);
+      const sigBytes = hexToBuf(signature);
+      return crypto.subtle.verify("Ed25519", publicKey, sigBytes.buffer as ArrayBuffer, encoded.buffer as ArrayBuffer);
+    },
+
+    /** Create a self-signed agent certificate */
+    async createCertificate(
+      privateKey: CryptoKey,
+      agent: { agentId: string; name: string; capabilities: string[] },
+      issuer?: string,
+    ): Promise<AgentCertificate> {
+      const rawPublic = await crypto.subtle.exportKey("raw", await derivePublicKey(privateKey));
+      const publicKeyHex = bufToHex(new Uint8Array(rawPublic));
+
+      const cert: Omit<AgentCertificate, "signature"> = {
+        agentId: agent.agentId,
+        name: agent.name,
+        publicKeyHex,
+        capabilities: [...agent.capabilities].sort(),
+        issuedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + certificateTtlMs).toISOString(),
+        issuer: issuer ?? agent.agentId,
+        delegationDepth: 0,
+      };
+
+      const canonical = JSON.stringify(deepSortKeys(cert));
+      const encoded = new TextEncoder().encode(canonical);
+      const sig = await crypto.subtle.sign("Ed25519", privateKey, encoded.buffer as ArrayBuffer);
+
+      return { ...cert, signature: bufToHex(new Uint8Array(sig)) };
+    },
+
+    /**
+     * Verify a certificate's signature and expiry.
+     *
+     * A self-signed certificate (`delegationDepth: 0`) is checked against its
+     * own embedded key. A delegated certificate is signed by its *issuer*, so
+     * pass the issuer's public key as `issuerPublicKeyHex` (normally the
+     * parent certificate's `publicKeyHex`); without it a delegated cert
+     * cannot verify.
+     */
+    async verifyCertificate(
+      cert: AgentCertificate,
+      issuerPublicKeyHex?: string,
+    ): Promise<{ valid: boolean; reason?: string }> {
+      if (cert.expiresAt && new Date(cert.expiresAt).getTime() < Date.now()) {
+        return { valid: false, reason: "Certificate has expired" };
+      }
+      if (cert.delegationDepth > 0 && issuerPublicKeyHex === undefined) {
+        return { valid: false, reason: "Delegated certificate requires issuerPublicKeyHex to verify" };
+      }
+
+      const publicKey = await importPublicKey(issuerPublicKeyHex ?? cert.publicKeyHex);
+      const { signature, ...certData } = cert;
+      const canonical = JSON.stringify(deepSortKeys(certData));
+      const encoded = new TextEncoder().encode(canonical);
+      const sigBytes = hexToBuf(signature);
+
+      const valid = await crypto.subtle.verify("Ed25519", publicKey, sigBytes.buffer as ArrayBuffer, encoded.buffer as ArrayBuffer);
+      return valid ? { valid: true } : { valid: false, reason: "Invalid certificate signature" };
+    },
+
+    /**
+     * Delegate identity to a child agent with narrowed capabilities.
+     * Child capabilities must be a subset of parent capabilities; the child
+     * inherits the parent's expiry and cannot be minted from an expired parent.
+     */
+    async delegate(
+      parentKey: CryptoKey,
+      parentCert: AgentCertificate,
+      child: { agentId: string; name: string; capabilities: string[] },
+    ): Promise<DelegatedIdentity> {
+      const depth = parentCert.delegationDepth + 1;
+      if (depth > maxDelegationDepth) {
+        throw new Error(`Delegation depth ${depth} exceeds maximum ${maxDelegationDepth}`);
+      }
+      if (parentCert.expiresAt && new Date(parentCert.expiresAt).getTime() < Date.now()) {
+        throw new Error("Cannot delegate from an expired parent certificate");
+      }
+
+      const invalid = child.capabilities.filter((c) => !parentCert.capabilities.includes(c));
+      if (invalid.length > 0) {
+        throw new Error(`Cannot delegate capabilities not held by parent: ${invalid.join(", ")}`);
+      }
+
+      const childKeyPair = await this.generateKeyPair();
+
+      const cert: Omit<AgentCertificate, "signature"> = {
+        agentId: child.agentId,
+        name: child.name,
+        publicKeyHex: childKeyPair.publicKeyHex,
+        capabilities: [...child.capabilities].sort(),
+        issuedAt: new Date().toISOString(),
+        expiresAt: parentCert.expiresAt, // inherit parent expiry
+        issuer: parentCert.agentId,
+        delegationDepth: depth,
+      };
+
+      const canonical = JSON.stringify(deepSortKeys(cert));
+      const encoded = new TextEncoder().encode(canonical);
+      const sig = await crypto.subtle.sign("Ed25519", parentKey, encoded);
+
+      return { keyPair: childKeyPair, certificate: { ...cert, signature: bufToHex(new Uint8Array(sig)) } };
+    },
+
+    /** Import a public key from hex for verification */
+    importPublicKey,
+  };
+}
+
+// ─── Utilities (also re-exported for high-level wrappers) ────
+
+/** @internal */
+export function bufToHex(buf: Uint8Array): string {
+  return Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** @internal */
+export function hexToBuf(hex: string): Uint8Array {
+  if (hex.length === 0 || hex.length % 2 !== 0) {
+    throw new Error("Invalid hex string: length must be a positive multiple of 2");
+  }
+  if (!/^[0-9a-fA-F]+$/.test(hex)) {
+    throw new Error("Invalid hex string: non-hex characters");
+  }
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+  }
+  return bytes;
+}
+
+/** @internal */
+export async function importPublicKey(hex: string): Promise<CryptoKey> {
+  const raw = hexToBuf(hex);
+  return crypto.subtle.importKey("raw", raw.buffer as ArrayBuffer, "Ed25519", true, ["verify"]);
+}
+
+async function derivePublicKey(privateKey: CryptoKey): Promise<CryptoKey> {
+  // Export the private key as JWK, then import only the public component
+  const jwk = await crypto.subtle.exportKey("jwk", privateKey);
+  delete jwk.d; // remove private component
+  jwk.key_ops = ["verify"];
+  return crypto.subtle.importKey("jwk", jwk, "Ed25519", true, ["verify"]);
+}
+
+// ─── High-level sign / verify wrappers ──────────────────────
+//
+// Thin, opinionated wrappers that match the README quick-start shape. Defined
+// in a separate module to keep this file under the 300-LOC limit.
+
+export type {
+  AgentIdentityToken,
+  SignAgentIdentityInput,
+  VerifyAgentIdentityOptions,
+  VerifyAgentIdentityResult,
+  VerifyAgentIdentityFailureReason,
+  IdentityReplayStore,
+  MemoryReplayStore,
+  MemoryReplayStoreOptions,
+} from "./agent-identity-ed25519-token.js";
+export {
+  signAgentIdentity,
+  verifyAgentIdentity,
+  createMemoryReplayStore,
+} from "./agent-identity-ed25519-token.js";

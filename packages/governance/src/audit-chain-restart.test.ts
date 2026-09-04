@@ -11,8 +11,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createGovernance, createMemoryStorage } from "./index.js";
-import { verifyAuditIntegrity } from "./audit-integrity-verify.js";
-import type { GovernanceStorage } from "./storage.js";
+import { verifyAuditIntegrity } from "@governance-sdk/core/audit-integrity-verify.js";
+import type { GovernanceStorage } from "@governance-sdk/core/storage.js";
 
 const KEY = "test-signing-key-0.12-restart";
 
