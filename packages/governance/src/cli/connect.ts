@@ -5,6 +5,10 @@
  *
  * Reads GOVERNANCE_API_URL and GOVERNANCE_API_KEY from env (or governance.config.ts).
  * Reports: connection status, plan, features, agent quota, latency.
+ *
+ * Works against a hosted governance API — any server implementing the
+ * remote-enforcer contract (GET /api/v1/connect; see docs/remote-contract.md
+ * at the repo root).
  */
 
 const RESET = "\x1b[0m";
@@ -29,7 +33,7 @@ export async function runConnect(): Promise<void> {
 
   if (!serverUrl) {
     print(`${RED}Error:${RESET} GOVERNANCE_API_URL not set`);
-    print(`${DIM}Set it in your environment: export GOVERNANCE_API_URL=https://api.heygovernance.ai${RESET}`);
+    print(`${DIM}Set it in your environment: export GOVERNANCE_API_URL=https://<your-governance-api>${RESET}`);
     process.exit(1);
   }
 
