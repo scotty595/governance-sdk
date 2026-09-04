@@ -95,18 +95,19 @@ moves code between packages or touches the exports map.
    every subpath and runs the kernel, a standards report and the identity
    plugin from the installed copy. CI runs it on every push.
 3. **A real consumer.** Install the tarball into a project that uses the SDK
-   and run its typecheck and tests. The non-invasive way is to swap it into
-   that project's `node_modules` and restore afterwards:
+   and run its typecheck, its tests, and the app itself. `npm run plug`
+   swaps the packed tarball into that project's `node_modules` without
+   touching its package.json or lockfile, and `--unplug` puts its own copy
+   back:
    ```sh
-   npm run pack
-   cd ../consumer
-   mv node_modules/governance-sdk /tmp/sdk.bak && mkdir node_modules/governance-sdk
-   tar -xzf ../governance-sdk/dist/governance-sdk-<version>.tgz -C node_modules/governance-sdk --strip-components=1
-   npx tsc --noEmit; npm test
-   rm -rf node_modules/governance-sdk && mv /tmp/sdk.bak node_modules/governance-sdk
+   npm run plug -- ../consumer            # pack + swap in (re-run to refresh)
+   (cd ../consumer && npx tsc --noEmit && npm test && npm run dev)
+   npm run plug -- ../consumer --unplug   # restore
    ```
-   Compare any error count with the same run on the currently installed
-   version, so pre-existing errors are not blamed on the change.
+   `--link` symlinks `packages/governance` instead, so `tsc -b --watch`
+   here shows up there live; use copy mode for the final check, since it is
+   what a user installs. Compare any error count with the same run on the
+   consumer's own version, so pre-existing errors are not blamed on the change.
 
 ## Releasing
 
