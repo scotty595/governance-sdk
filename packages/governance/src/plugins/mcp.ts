@@ -66,11 +66,13 @@ export async function createGovernedMCP(
   config: GovernMCPConfig,
   resourceReadHandler?: MCPResourceReadHandler,
 ): Promise<GovernedMCPResult> {
-  const reg = buildRegistration(config);
-  const result = await governance.register(reg);
-
-  const enforce = createEnforcer(governance, result.id, result.level, config);
-  const audit = createAuditor(governance, result.id);
+  const core = await createAdapterCore(governance, config, {
+    tools: config.tools ?? [],
+    framework: "mcp",
+    callbacks: config,
+  });
+  const enforce = (toolName: string, input?: Record<string, unknown>) => core.enforce(toolName, input);
+  const audit = core.audit;
 
   const governResources = config.governResources !== false;
 
@@ -121,10 +123,7 @@ export async function createGovernedMCP(
       // sensitive_data_filter, output_pattern, scope_boundary, composites,
       // kill switch); first matching rule's outcome wins.
       if (config.scanToolOutputs !== false) {
-        const scanned = await scanToolResult({
-          governance,
-          agentId: result.id,
-          agentName: config.agentName,
+        const scanned = await core.scanResult({
           tool: toolName,
           args: args as Record<string, unknown> | undefined,
           result: output.content,
@@ -158,14 +157,7 @@ export async function createGovernedMCP(
     if (governResources && resourceReadHandler) {
       const uri = request.params.uri;
       const resourceAction = config.resourceActionMapper?.(uri) ?? ("data_access" as PolicyAction);
-
-      const decision = await governance.enforce({
-        agentId: result.id, agentName: config.agentName, agentLevel: result.level,
-        action: resourceAction, tool: uri,
-        metadata: { resourceUri: uri },
-      });
-
-      handleOutcome(decision, uri, config as OutcomeCallbacks);
+      await core.enforce(uri, undefined, { action: resourceAction, metadata: { resourceUri: uri } });
     }
 
     if (!resourceReadHandler) {
@@ -188,9 +180,9 @@ export async function createGovernedMCP(
   return {
     handleToolCall,
     handleResourceRead,
-    agentId: result.id,
-    score: result.score,
-    level: result.level,
+    agentId: core.agentId,
+    score: core.score,
+    level: core.agentLevel,
     governance,
     enforce,
     audit,

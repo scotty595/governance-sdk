@@ -1,7 +1,7 @@
 {
   "name": "governance-sdk",
   "version": "0.22.0",
-  "description": "AI Agent Governance for TypeScript — policy enforcement, scoring, compliance, and audit for AI agents",
+  "description": "AI Agent Governance for TypeScript \u2014 policy enforcement, scoring, compliance, and audit for AI agents",
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.js",
@@ -213,7 +213,7 @@
     "build": "tsc && node scripts/fix-esm-imports.mjs",
     "dev": "tsc --watch",
     "test": "tsx --test src/*.test.ts src/**/*.test.ts",
-    "lint": "tsc --noEmit",
+    "lint": "tsc --noEmit && node ../../scripts/check-layering.mjs",
     "prepublishOnly": "node ../../scripts/sync-readme.mjs && tsc"
   },
   "keywords": [
@@ -280,18 +280,42 @@
     "pg": ">=8.0.0"
   },
   "peerDependenciesMeta": {
-    "@mastra/core": { "optional": true },
-    "ai": { "optional": true },
-    "langchain": { "optional": true },
-    "openai-agents": { "optional": true },
-    "pg": { "optional": true },
-    "@modelcontextprotocol/sdk": { "optional": true },
-    "@aws-sdk/client-bedrock-agent-runtime": { "optional": true },
-    "genkit": { "optional": true },
-    "llamaindex": { "optional": true },
-    "@anthropic-ai/sdk": { "optional": true },
-    "@mistralai/mistralai": { "optional": true },
-    "ollama": { "optional": true }
+    "@mastra/core": {
+      "optional": true
+    },
+    "ai": {
+      "optional": true
+    },
+    "langchain": {
+      "optional": true
+    },
+    "openai-agents": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "@aws-sdk/client-bedrock-agent-runtime": {
+      "optional": true
+    },
+    "genkit": {
+      "optional": true
+    },
+    "llamaindex": {
+      "optional": true
+    },
+    "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "@mistralai/mistralai": {
+      "optional": true
+    },
+    "ollama": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^25.4.0",

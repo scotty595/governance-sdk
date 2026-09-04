@@ -11,7 +11,7 @@
 
 import type { GovernanceInstance, AuditEvent } from "../index";
 import type { EnforcementDecision, PolicyAction } from "../policy";
-import type { AgentFramework } from "../types";
+import type { AdapterConfig } from "./adapter-core.js";
 
 // ─── MCP SDK Shapes (spec 2025-11-25) ──────────────────────
 
@@ -141,33 +141,19 @@ export interface MCPToolAnnotations {
 
 // ─── Configuration ──────────────────────────────────────────
 
-export interface GovernMCPConfig {
-  /**
-   * Optional stable agent id, forwarded to `gov.register({ id })`. Pass the
-   * same value on every process start so registration re-binds to the
-   * existing agent row in durable storage instead of creating a new one.
-   * Omit to let the SDK mint a fresh UUID on each registration.
-   */
-  agentId?: string;
-  agentName: string;
-  owner: string;
-  framework?: AgentFramework;
-  description?: string;
-  version?: string;
-  channels?: string[];
+/**
+ * Extends the shared `AdapterConfig`, so beyond the MCP-specific fields below
+ * it accepts every cross-adapter option: `agentId`, `agentName`, `owner`,
+ * `framework`, `metadata`, `actionMapper`, `sessionTokenTracker`, the
+ * `onBlocked` / `onDecision` / `onWarn` / `onMask` / `onApprovalRequired`
+ * callbacks, plus `toolTiers` (consequence tiers for `requireTierApproval()`),
+ * `trackTaint` (carry provenance from scanned tool outputs onto later calls
+ * for `blockTaintedTools()`) and `toolFieldExtraction` (map tool arguments
+ * onto `ctx.targetPath` / `ctx.targetUrl`).
+ */
+export interface GovernMCPConfig extends AdapterConfig {
+  /** Tool names declared at registration. */
   tools?: string[];
-  hasAuth?: boolean;
-  hasGuardrails?: boolean;
-  hasObservability?: boolean;
-  permissions?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
-  onBlocked?: (decision: EnforcementDecision, toolName: string) => void;
-  onDecision?: (decision: EnforcementDecision, toolName: string) => void;
-  onWarn?: (decision: EnforcementDecision, toolName: string) => void;
-  onMask?: (decision: EnforcementDecision, toolName: string, maskedText: string) => void;
-  onApprovalRequired?: (decision: EnforcementDecision, toolName: string) => void;
-  actionMapper?: (toolName: string) => PolicyAction;
-  sessionTokenTracker?: () => number;
   /** Map resource URIs to policy actions (default: data_access) */
   resourceActionMapper?: (uri: string) => PolicyAction;
   /** Whether to govern resource reads (default: true) */

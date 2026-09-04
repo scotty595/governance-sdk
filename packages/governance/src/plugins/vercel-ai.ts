@@ -46,13 +46,9 @@ import type {
   GovernanceInstance,
   AuditEvent,
 } from "../index";
-import type {
-  EnforcementDecision,
-  PolicyAction,
-} from "../policy";
-import type { AgentRegistration, AgentFramework } from "../types";
-import { handleOutcome } from "./outcome-handler.js";
-import type { OutcomeCallbacks } from "./outcome-handler.js";
+import type { EnforcementDecision } from "../policy";
+import { createAdapterCore } from "./adapter-core.js";
+import type { AdapterConfig } from "./adapter-core.js";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -104,33 +100,17 @@ export interface VercelTool {
   args?: Record<string, unknown>;
 }
 
-export interface GovernedToolsConfig {
-  /**
-   * Optional stable agent id, forwarded to `gov.register({ id })`. Pass the
-   * same value on every process start so registration re-binds to the
-   * existing agent row in durable storage instead of creating a new one.
-   * Omit to let the SDK mint a fresh UUID on each registration.
-   */
-  agentId?: string;
-  agentName: string;
-  owner: string;
-  framework?: AgentFramework;
-  description?: string;
-  version?: string;
-  channels?: string[];
-  hasAuth?: boolean;
-  hasGuardrails?: boolean;
-  hasObservability?: boolean;
-  permissions?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
-  onBlocked?: (decision: EnforcementDecision, toolName: string) => void;
-  onDecision?: (decision: EnforcementDecision, toolName: string) => void;
-  onWarn?: (decision: EnforcementDecision, toolName: string) => void;
-  onMask?: (decision: EnforcementDecision, toolName: string, maskedText: string) => void;
-  onApprovalRequired?: (decision: EnforcementDecision, toolName: string) => void;
-  actionMapper?: (toolName: string) => PolicyAction;
-  sessionTokenTracker?: () => number;
-}
+/**
+ * Everything the shared `AdapterConfig` accepts: `agentId`, `agentName`,
+ * `owner`, `framework`, `metadata`, `actionMapper`, `sessionTokenTracker`,
+ * the `onBlocked` / `onDecision` / `onWarn` / `onMask` /
+ * `onApprovalRequired` callbacks, plus `toolTiers` (consequence tiers for
+ * `requireTierApproval()`), `trackTaint` (provenance carried from scanned
+ * tool output onto later calls, for `blockTaintedTools()`) and
+ * `toolFieldExtraction` (map tool arguments onto `ctx.targetPath` /
+ * `ctx.targetUrl` so `scope_boundary` and `network_allowlist` match).
+ */
+export type GovernedToolsConfig = AdapterConfig;
 
 export interface GovernedToolsResult<T> {
   tools: T;
@@ -161,59 +141,13 @@ export async function createGovernedTools<
   tools: T,
   config: GovernedToolsConfig,
 ): Promise<GovernedToolsResult<T>> {
-  const registration: AgentRegistration = {
-    id: config.agentId,
-    name: config.agentName,
-    framework: config.framework ?? "vercel-ai",
-    owner: config.owner,
-    description: config.description,
-    version: config.version,
-    channels: config.channels,
+  const core = await createAdapterCore(governance, config, {
     tools: Object.keys(tools),
-    hasAuth: config.hasAuth,
-    hasGuardrails: config.hasGuardrails,
-    hasObservability: config.hasObservability,
-    hasAuditLog: true,
-    permissions: config.permissions,
-    metadata: config.metadata,
-  };
-
-  const result = await governance.register(registration);
-
-  async function enforce(
-    toolName: string,
-    input?: Record<string, unknown>,
-  ): Promise<EnforcementDecision> {
-    const action = config.actionMapper?.(toolName) ?? ("tool_call" as PolicyAction);
-
-    const decision = await governance.enforce({
-      agentId: result.id,
-      agentName: config.agentName,
-      agentLevel: result.level,
-      action,
-      tool: toolName,
-      input,
-      sessionTokensUsed: config.sessionTokenTracker?.(),
-    });
-
-    handleOutcome(decision, toolName, config as OutcomeCallbacks);
-
-    return decision;
-  }
-
-  async function audit(
-    toolName: string,
-    outcome: "success" | "failure",
-    detail?: Record<string, unknown>,
-  ): Promise<AuditEvent> {
-    return governance.audit.log({
-      agentId: result.id,
-      eventType: "tool_call",
-      outcome,
-      severity: outcome === "failure" ? "warning" : "info",
-      detail: { tool: toolName, ...detail },
-    });
-  }
+    framework: "vercel-ai",
+    callbacks: config,
+  });
+  const enforce = (toolName: string, input?: Record<string, unknown>) => core.enforce(toolName, input);
+  const audit = core.audit;
 
   // Wrap each tool's execute function
   const governed = {} as Record<string, VercelTool>;
@@ -221,29 +155,19 @@ export async function createGovernedTools<
     governed[name] = {
       ...tool,
       execute: tool.execute
-        ? async (input: unknown, options: VercelToolExecutionOptions) => {
-            await enforce(name, (input ?? {}) as Record<string, unknown>);
-
-            try {
-              const output = await tool.execute!(input, options);
-              await audit(name, "success");
-              return output;
-            } catch (error) {
-              await audit(name, "failure", {
-                error: error instanceof Error ? error.message : String(error),
-              });
-              throw error;
-            }
-          }
+        ? (input: unknown, options: VercelToolExecutionOptions) =>
+            core.run(name, (input ?? {}) as Record<string, unknown>, async () =>
+              tool.execute!(input, options),
+            )
         : undefined,
     };
   }
 
   return {
     tools: governed as T,
-    agentId: result.id,
-    score: result.score,
-    level: result.level,
+    agentId: core.agentId,
+    score: core.score,
+    level: core.agentLevel,
     governance,
     enforce,
     audit,
