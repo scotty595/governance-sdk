@@ -1,21 +1,21 @@
 {
-  "generatedAt": "2026-06-26T10:22:11.134Z",
+  "generatedAt": "2026-09-04T04:41:22.818Z",
   "detector": "governance-sdk/injection-detect (regex, 56 patterns, 7 categories)",
   "dataset": "Lua Injection Benchmark (LIB) v1",
   "totalSamples": 6931,
   "attacks": 2096,
   "benign": 4835,
   "confusion": {
-    "tp": 801,
-    "tn": 4475,
-    "fp": 360,
-    "fn": 1295
+    "tp": 829,
+    "tn": 4476,
+    "fp": 359,
+    "fn": 1267
   },
-  "precision": 0.689922480620155,
-  "recall": 0.3821564885496183,
-  "f1": 0.4918636782315014,
-  "accuracy": 0.7612177175010821,
-  "falsePositiveRate": 0.07445708376421924,
+  "precision": 0.6978114478114478,
+  "recall": 0.3955152671755725,
+  "f1": 0.504872107186358,
+  "accuracy": 0.7654018179194921,
+  "falsePositiveRate": 0.07425025853154085,
   "bySource": {
     "JailbreakBench/JBB-Behaviors": {
       "tp": 0,
@@ -31,8 +31,8 @@
     },
     "TrustAIRLab/in-the-wild-jailbreak-prompts": {
       "tp": 358,
-      "tn": 736,
-      "fp": 344,
+      "tn": 737,
+      "fp": 343,
       "fn": 341
     },
     "databricks/databricks-dolly-15k": {
@@ -60,10 +60,10 @@
       "fn": 6
     },
     "neuralchemy/Prompt-injection-dataset": {
-      "tp": 98,
+      "tp": 120,
       "tn": 461,
       "fp": 0,
-      "fn": 431
+      "fn": 409
     },
     "reshabhs/SPML": {
       "tp": 73,
@@ -78,10 +78,10 @@
       "fn": 6
     },
     "generated-encoding": {
-      "tp": 234,
+      "tp": 240,
       "tn": 0,
       "fp": 0,
-      "fn": 224
+      "fn": 218
     },
     "generated-hard-negatives": {
       "tp": 0,

@@ -1,6 +1,12 @@
 /**
  * Extended injection patterns — obfuscation and advanced attacks.
  * Separated to keep each file under 300 LOC.
+ *
+ * Obfuscation-category patterns are also matched against the RAW input by
+ * detectInjection(): normalisation strips the very characters most of them
+ * look for (zero-width/format chars, bidi controls, combining marks) and
+ * NFKC folds fullwidth letters and exotic spaces to ASCII, so on normalised
+ * text alone they would never fire.
  */
 
 import type { InjectionPattern } from "./injection-detect.js";
@@ -46,7 +52,12 @@ export const EXTENDED_PATTERNS: InjectionPattern[] = [
   {
     id: "excessive_spacing",
     category: "obfuscation",
-    pattern: /\w+\s{4,}\w+.*\w+\s{4,}\w+/,
+    // Two runs of 4+ whitespace between word characters, within 500 chars on
+    // one line. A single `\w` on each side of a gap and a bounded window keep
+    // this linear; the previous `\w+\s{4,}\w+.*\w+\s{4,}\w+` was quartic on
+    // `aaa…    bbb…` (35s for a 1KB input) and quadratic on any long token.
+    // Truthiness is unchanged: `\w+` around a gap always reduces to one `\w`.
+    pattern: /\w\s{4,}\w[^\n]{0,500}?\w\s{4,}\w/,
     weight: 0.5,
     description: "Excessive spacing between words (obfuscation attempt)",
   },

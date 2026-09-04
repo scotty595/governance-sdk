@@ -61,8 +61,9 @@ describe("LIB full-dataset regex baseline", () => {
     const recall = tp / (tp + fn);
     const f1 = (2 * precision * recall) / (precision + recall);
 
-    // The committed baseline is F1 ≈ 0.4936. Guard within ±2%.
-    assert.ok(f1 > 0.47, `F1 regressed: ${f1.toFixed(4)} (baseline 0.4936)`);
+    // The committed baseline is F1 ≈ 0.5049 (regenerated 2026-09-04 after the
+    // normalisation and ReDoS work). Guard within ±2%.
+    assert.ok(f1 > 0.485, `F1 regressed: ${f1.toFixed(4)} (baseline 0.5049)`);
     assert.ok(f1 < 0.52, `F1 improved above guard: ${f1.toFixed(4)} — update the committed baseline`);
   });
 

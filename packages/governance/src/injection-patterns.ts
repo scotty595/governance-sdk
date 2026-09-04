@@ -9,6 +9,10 @@
  * - Require adversarial context (possessive "your", system-targeting language)
  * - Low individual weights (0.2-0.5) — attacks combine, benign text doesn't
  * - Higher weights (0.7+) only for patterns that are NEVER legitimate
+ * - Linear-time regexes only: no unbounded `.*` / `.*?`, no `\s+…?\s*`
+ *   adjacency (quadratic on a long run of spaces), intervening words as
+ *   `\w{1,64}`, look-ahead windows as `[^\n]{0,N}`. Every pattern is timed
+ *   against adversarial 50KB inputs in injection-redos.test.ts.
  */
 
 import type { InjectionPattern } from "./injection-detect.js";
@@ -58,7 +62,7 @@ export const BUILTIN_PATTERNS: InjectionPattern[] = [
   {
     id: "override_system",
     category: "instruction_override",
-    pattern: /\b(?:override|bypass|circumvent|disable)\s+(?:your|the|all|any)?\s*(?:system|safety|security|content)\s*(?:prompt|instructions?|filters?|rules?|restrictions?|policies?|guidelines?)\b/i,
+    pattern: /\b(?:override|bypass|circumvent|disable)\s{1,10}(?:your|the|all|any)?\s{0,10}(?:system|safety|security|content)\s{0,10}(?:prompt|instructions?|filters?|rules?|restrictions?|policies?|guidelines?)\b/i,
     weight: 0.8,
     description: "Explicit system override attempt",
   },
@@ -85,7 +89,7 @@ export const BUILTIN_PATTERNS: InjectionPattern[] = [
   {
     id: "act_as_unrestricted",
     category: "role_manipulation",
-    pattern: /\b(?:act|behave|respond|pretend|roleplay)\s+(?:as\s+(?:if|though)\s+you\s+(?:are|were|have|had)\s+(?:no|without|free\s+from|an?\s+\w+\s+(?:with\s+)?(?:no|without))\s+(?:restrictions?|limitations?|rules?|filters?|boundaries|guidelines?|safety))\b/i,
+    pattern: /\b(?:act|behave|respond|pretend|roleplay)\s+(?:as\s+(?:if|though)\s+you\s+(?:are|were|have|had)\s+(?:no|without|free\s+from|an?\s+\w{1,64}\s+(?:with\s+)?(?:no|without))\s+(?:restrictions?|limitations?|rules?|filters?|boundaries|guidelines?|safety))\b/i,
     weight: 0.8,
     description: "Role-play to remove restrictions",
   },
@@ -120,7 +124,7 @@ export const BUILTIN_PATTERNS: InjectionPattern[] = [
   {
     id: "new_role_unrestricted",
     category: "role_manipulation",
-    pattern: /\b(?:your\s+new\s+role\s+is|assume\s+the\s+role\s+of)\s+(?:a\s+)?(?:.*?(?:no\s+rules|unrestricted|unfiltered|without\s+(?:restrictions|limitations|rules)))/i,
+    pattern: /\b(?:your\s+new\s+role\s+is|assume\s+the\s+role\s+of)\s{1,10}(?:a\s+)?[^\n]{0,300}?(?:no\s+rules|unrestricted|unfiltered|without\s+(?:restrictions|limitations|rules))/i,
     weight: 0.7,
     description: "Explicit role reassignment to unrestricted entity",
   },
@@ -154,7 +158,10 @@ export const BUILTIN_PATTERNS: InjectionPattern[] = [
   {
     id: "markdown_injection",
     category: "context_escape",
-    pattern: /!\[.*?\]\((?:https?:\/\/|data:).*?\)/i,
+    // Alt text may not contain `]` and is capped at 200 chars, which makes the
+    // scan deterministic; the closing `)` is not required — an image whose URL
+    // is remote or a data: URI is the signal, however long the URL runs.
+    pattern: /!\[[^\]\n]{0,200}\]\((?:https?:\/\/|data:)/i,
     weight: 0.5,
     description: "Markdown image injection (potential data exfiltration)",
   },
@@ -209,7 +216,7 @@ export const BUILTIN_PATTERNS: InjectionPattern[] = [
   {
     id: "dump_secrets",
     category: "data_exfiltration",
-    pattern: /\b(?:dump|exfiltrate|leak|steal|harvest)\s+(?:the\s+)?(?:all\s+)?(?:\w+\s+)?(?:environment\s+variables?|api\s+keys?|credentials?|secrets?|passwords?|tokens?|private\s+keys?)\b/i,
+    pattern: /\b(?:dump|exfiltrate|leak|steal|harvest)\s+(?:the\s+)?(?:all\s+)?(?:\w{1,64}\s+)?(?:environment\s+variables?|api\s+keys?|credentials?|secrets?|passwords?|tokens?|private\s+keys?)\b/i,
     weight: 0.85,
     description: "Explicit secret dumping/exfiltration verbs",
   },
@@ -227,7 +234,7 @@ export const BUILTIN_PATTERNS: InjectionPattern[] = [
   {
     id: "base64_payload",
     category: "encoding_attack",
-    pattern: /\b(?:decode|execute|run|eval)[\s\w]*?(?:base64|b64|encoded|:)\s*[A-Za-z0-9+/]{16,}={0,2}/i,
+    pattern: /\b(?:decode|execute|run|eval)[\s\w]{0,80}?(?:base64|b64|encoded|:)\s*[A-Za-z0-9+/]{16,}={0,2}/i,
     weight: 0.7,
     description: "Base64-encoded payload injection",
   },
@@ -255,7 +262,9 @@ export const BUILTIN_PATTERNS: InjectionPattern[] = [
   {
     id: "unicode_homoglyph",
     category: "encoding_attack",
-    pattern: /[\u0400-\u04FF\u0500-\u052F].*(?:ignore|override|system|admin)/i,
+    // Only the LAST char of a Cyrillic run opens the 200-char window (the
+    // negative lookahead), so a 50KB Cyrillic block costs O(n), not O(n²).
+    pattern: /[\u0400-\u052F](?![\u0400-\u052F])[^\n]{0,200}?(?:ignore|override|system|admin)/i,
     weight: 0.6,
     description: "Unicode homoglyph attack (Cyrillic characters masking Latin)",
   },
@@ -283,7 +292,7 @@ export const BUILTIN_PATTERNS: InjectionPattern[] = [
   {
     id: "html_entity_seq",
     category: "encoding_attack",
-    pattern: /(?:&#{1,2}[xX]?[0-9A-Fa-f]+;){5,}/,
+    pattern: /(?:&#{1,2}[xX]?[0-9A-Fa-f]{1,8};){5,}/,
     weight: 0.6,
     description: "HTML entity encoding chain",
   },
@@ -308,7 +317,7 @@ export const BUILTIN_PATTERNS: InjectionPattern[] = [
   {
     id: "authority_claim_override",
     category: "social_engineering",
-    pattern: /\bi\s+am\s+(?:your|the)\s+(?:admin|administrator|developer|creator|owner)\b.*?\b(?:override|disable|remove|bypass|ignore|give\s+me|grant|elevate)\b/i,
+    pattern: /\bi\s+am\s+(?:your|the)\s+(?:admin|administrator|developer|creator|owner)\b[^\n]{0,200}?\b(?:override|disable|remove|bypass|ignore|give\s+me|grant|elevate)\b/i,
     weight: 0.7,
     description: "Authority claim combined with override request",
   },
@@ -326,14 +335,14 @@ export const BUILTIN_PATTERNS: InjectionPattern[] = [
   {
     id: "persist_override",
     category: "instruction_override",
-    pattern: /\b(?:remember|save|store|persist|keep)\s+(?:this\s+)?(?:as\s+)?(?:a\s+)?(?:permanent|forever|always|from\s+now\s+on)\s*(?:rule|instruction|override|setting)?\s*(?::\s*)?(?:skip|disable|ignore|bypass|override|grant|allow|comply)/i,
+    pattern: /\b(?:remember|save|store|persist|keep)\s+(?:this\s+)?(?:as\s+)?(?:a\s+)?(?:permanent|forever|always|from\s+now\s+on)\s{0,10}(?:rule|instruction|override|setting)?\s{0,10}(?::\s{0,10})?(?:skip|disable|ignore|bypass|override|grant|allow|comply)/i,
     weight: 0.7,
     description: "Attempts to persist a policy override across sessions",
   },
   {
     id: "future_sessions",
     category: "instruction_override",
-    pattern: /\b(?:for\s+all\s+future\s+(?:messages?|conversations?|sessions?)|from\s+this\s+point\s+forward|permanently)\s*[,:]?\s*(?:you\s+)?(?:have|are|will|must|should)\s+(?:admin|elevated|full|unrestricted|no\s+restrict)/i,
+    pattern: /\b(?:for\s+all\s+future\s+(?:messages?|conversations?|sessions?)|from\s+this\s+point\s+forward|permanently)\s{0,10}[,:]?\s{0,10}(?:you\s+)?(?:have|are|will|must|should)\s+(?:admin|elevated|full|unrestricted|no\s+restrict)/i,
     weight: 0.7,
     description: "Claims permanent privilege escalation across sessions",
   },
@@ -364,7 +373,7 @@ export const BUILTIN_PATTERNS: InjectionPattern[] = [
   {
     id: "agent_worm_propagation",
     category: "social_engineering",
-    pattern: /\b(?:(?:forward|send|relay|copy|broadcast|spread)\s+(?:this\s+)?(?:message|instruction|prompt|text|content)?\s*to\s+(?:(?:all|every|each|other|the\s+other)\s+)+(?:agents?|assistants?|bots?|models?|conversations?|sessions?|chats?|instances?)|(?:inject|replicate|propagate|embed)\s+(?:yourself|this)?\s*(?:into|across|to)\s+(?:(?:all|every|other|each)\s+)*(?:agents?|conversations?|sessions?|instances?)|all\s+(?:other\s+)?(?:agents?|assistants?)\s+(?:must|should|need\s+to|are\s+(?:to|required|instructed)))/i,
+    pattern: /\b(?:(?:forward|send|relay|copy|broadcast|spread)\s{1,10}(?:this\s+)?(?:message|instruction|prompt|text|content)?\s{0,10}to\s+(?:(?:all|every|each|other|the\s+other)\s+)+(?:agents?|assistants?|bots?|models?|conversations?|sessions?|chats?|instances?)|(?:inject|replicate|propagate|embed)\s{1,10}(?:yourself|this)?\s{0,10}(?:into|across|to)\s+(?:(?:all|every|other|each)\s+)*(?:agents?|conversations?|sessions?|instances?)|all\s+(?:other\s+)?(?:agents?|assistants?)\s+(?:must|should|need\s+to|are\s+(?:to|required|instructed)))/i,
     weight: 0.75,
     description: "Self-propagating instruction targeting other agents (agent-worm)",
   },
@@ -375,7 +384,7 @@ export const BUILTIN_PATTERNS: InjectionPattern[] = [
   {
     id: "conditional_action",
     category: "instruction_override",
-    pattern: /\b(?:when(?:ever)?|after\s+\d+\s+(?:messages?|turns?)|next\s+time)\s+.{5,80}?\b(?:exfiltrate|dump\s+(?:all|the|stored)|reveal\s+(?:the\s+)?(?:system|hidden|secret)|output\s+(?:the\s+)?(?:system|prompt|secret)|send\s+(?:all|the)\s+(?:data|conversation|credentials?))\b/i,
+    pattern: /\b(?:when(?:ever)?|after\s+\d+\s+(?:messages?|turns?)|next\s+time)\s{1,10}.{5,80}?\b(?:exfiltrate|dump\s+(?:all|the|stored)|reveal\s+(?:the\s+)?(?:system|hidden|secret)|output\s+(?:the\s+)?(?:system|prompt|secret)|send\s+(?:all|the)\s+(?:data|conversation|credentials?))\b/i,
     weight: 0.6,
     description: "Conditional trigger: malicious action activates on a condition",
   },
@@ -398,7 +407,7 @@ export const BUILTIN_PATTERNS: InjectionPattern[] = [
   {
     id: "forced_tool_call",
     category: "instruction_override",
-    pattern: /\b(?:tool[_\s-]?choice|function[_\s-]?call|force[_\s-]?(?:tool|function|call))\s*[:=]\s*["'{]?\s*(?:required|forced?|always|any|auto)\b/i,
+    pattern: /\b(?:tool[_\s-]?choice|function[_\s-]?call|force[_\s-]?(?:tool|function|call))\s{0,10}[:=]\s{0,10}["'{]?\s{0,10}(?:required|forced?|always|any|auto)\b/i,
     weight: 0.6,
     description: "Forces a specific tool/function invocation (API control in input)",
   },
