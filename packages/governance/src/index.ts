@@ -153,3 +153,6 @@ export type { ScanToolResultInput, ScanToolResultOutput, BlockedToolResult } fro
 export { SENSITIVE_PATTERNS, getSensitivePatterns } from "@governance-sdk/plugins/conditions/sensitive-patterns.js";
 export type { SensitivePattern } from "@governance-sdk/plugins/conditions/sensitive-patterns.js";
 export { maskSensitiveData, maskPattern, maskBlocklistTerms } from "@governance-sdk/plugins/mask.js";
+
+// Type of `gov.failModes()`; was a root export in 0.22.0.
+export type { FailModes } from "@governance-sdk/core/governance.js";

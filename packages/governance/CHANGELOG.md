@@ -14,8 +14,10 @@ accommodate the move. See `docs/restructure-plan.md`.
   (framework adapters and the Agent Hooks surface), and `governance-sdk`, the
   meta-package you install. The three scoped packages are `private: true`
   under a placeholder scope; nothing new is publishable and renaming the scope
-  is one find-and-replace. All 53 published subpaths keep working through
-  compatibility shims that say which package now owns each.
+  is one find-and-replace. All 48 subpaths 0.22.0 shipped keep working
+  through compatibility shims that say which package now owns each, and the
+  five phase A added (`plugin`, `conformance/agent-hooks`, `ext/*`) resolve
+  the same way.
 - **The kernel imports nothing from the extension layer.** Every layering
   exception is gone: detection conditions, the sensitive-data evaluator and
   its masker, tool-result scanning, the modality gate, and scoring all left
@@ -38,6 +40,15 @@ accommodate the move. See `docs/restructure-plan.md`.
 - `tsconfig.base.json` holds the shared compiler settings; `tsc -b` builds the
   packages in dependency order; `npm ci` → build → lint → test verified
   against a clean tree.
+- **The published tarball is self-contained.** `npm run pack` stages the
+  three private packages inside `governance-sdk`'s tarball, because npm does
+  not bundle workspace links (declaring `bundleDependencies` alone yields a
+  package that installs and then fails on first `import`). `npm run
+  verify-pack` installs that tarball into a fresh project and imports every
+  subpath; CI and the release workflow run it, and the release publishes the
+  tarball rather than `npm publish -w`. An API-surface diff of every subpath
+  against 0.22.0 (`scripts/api-surface.mjs`) showed no runtime export removed
+  and one dropped type export at the root, `FailModes`, now restored.
 
 ### Added — new surface (phase C)
 

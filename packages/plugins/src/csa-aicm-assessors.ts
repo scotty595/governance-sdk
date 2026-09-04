@@ -151,7 +151,7 @@ export async function assessAicmRequirement(
     // ─── STA ───
     case "sta-component-inventory": {
       if (agents.length === 0) return fail(id, "No agents registered — no component inventory", "Register agents with their tools list");
-      const withTools = agents.filter((a) => a.tools.length > 0);
+      const withTools = agents.filter((a) => a.tools && a.tools.length > 0);
       if (withTools.length === agents.length) return ok(id, `${agents.length} agent(s) inventory their components`);
       return partial(id, `${withTools.length}/${agents.length} agents inventory their tools`, "Declare tools on every agent registration");
     }

@@ -139,7 +139,7 @@ export async function assessImdaRequirement(
     // ─── 2.4 Enable end-user responsibility ───
     case "p4-capability-disclosure": {
       if (agents.length === 0) return fail(id, "No agents registered — no capabilities to disclose", "Register agents with a description and tools list");
-      const disclosed = agents.filter((a) => a.description && a.tools.length > 0);
+      const disclosed = agents.filter((a) => a.description && a.tools && a.tools.length > 0);
       if (disclosed.length === agents.length) return ok(id, `${agents.length} agent(s) have a documented description and tool set to disclose`);
       return partial(id, `${disclosed.length}/${agents.length} agents document both description and tools`, "Add a description and tools list to every agent registration");
     }

@@ -85,10 +85,17 @@ the release goes to npm, so the two never drift.
    GitHub Release title and the section body becomes its notes.
 3. Merge to `main`, then tag and push: `git tag v<version> && git push origin v<version>`.
 4. The **Release** workflow (`.github/workflows/release.yml`) verifies the tag
-   matches the package version, builds, tests, creates the GitHub Release, and
-   publishes to npm **only if** the repository variable `PUBLISH_TO_NPM` is
-   `true` or the workflow is run manually with `publish_npm` checked. While
-   publishing is paused the release notes say so.
+   matches the package version, builds, tests, packs and verifies the tarball,
+   creates the GitHub Release, and publishes to npm **only if** the repository
+   variable `PUBLISH_TO_NPM` is `true` or the workflow is run manually with
+   `publish_npm` checked. While publishing is paused the release notes say so.
+
+The artifact that gets published is the tarball `npm run pack` builds, never
+`npm publish -w packages/governance`: `governance-sdk` depends on three
+private workspace packages and npm does not bundle workspace links, so a
+`-w` publish would ship a package that installs and then fails on its first
+`import`. `npm run verify-pack` installs the tarball into a fresh project
+and imports every subpath; run it before tagging.
 
 Switching npm publishing back on later needs no code change: set the variable
 (or run the workflow manually for any already-tagged version) and the same

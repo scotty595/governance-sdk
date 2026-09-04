@@ -374,5 +374,10 @@
     "@governance-sdk/core": "0.22.0",
     "@governance-sdk/plugins": "0.22.0",
     "@governance-sdk/adapters": "0.22.0"
-  }
+  },
+  "bundleDependencies": [
+    "@governance-sdk/core",
+    "@governance-sdk/plugins",
+    "@governance-sdk/adapters"
+  ]
 }

@@ -263,7 +263,18 @@ is now a build constraint rather than a lint over paths.
 | `@governance-sdk/adapters` (private) | core, plugins | 45 | 435 |
 | `governance-sdk` (publishable) | all three | 5 + 51 compatibility shims | 303 |
 
-Four things the move taught, beyond what the plan anticipated:
+Five things the move taught, beyond what the plan anticipated:
+
+- **The meta-package was uninstallable, and no test could see it.** Its
+  dependencies are three private packages, and npm does not bundle workspace
+  links — `bundleDependencies` produces the same tarball and then makes
+  `npm install` succeed and the first `import` fail. Every workspace test
+  resolved through symlinks and passed. The fix is a staged, self-contained
+  tarball (`scripts/pack-meta.mjs`) and a check that installs it into a
+  fresh project and imports every subpath (`scripts/verify-pack.mjs`), both
+  in CI and the release workflow. The same check found a report crashing on
+  an agent row without `tools`. An API-surface diff against `main`
+  (`scripts/api-surface.mjs`) found one dropped type export at the root.
 
 - **The lint changed job and got stronger.** It no longer compares paths; it
   compares what a package *imports* against what it *declares*. That catches

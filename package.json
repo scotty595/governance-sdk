@@ -17,6 +17,8 @@
   ],
   "scripts": {
     "build": "tsc -b packages/core packages/plugins packages/adapters packages/governance && npm run build -w packages/governance-platform",
+    "pack": "node scripts/pack-meta.mjs",
+    "verify-pack": "node scripts/pack-meta.mjs && node scripts/verify-pack.mjs",
     "test": "npm test -w packages/core && npm test -w packages/plugins && npm test -w packages/adapters && npm test -w packages/governance && npm test -w packages/governance-platform",
     "lint": "tsc -b --dry packages/core packages/plugins packages/adapters packages/governance >/dev/null && npm run lint -w packages/governance && npm run lint -w packages/governance-platform && node scripts/check-layering.mjs",
     "sync-readme": "node scripts/sync-readme.mjs",

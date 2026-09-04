@@ -92,7 +92,7 @@ export async function assessGenAiRequirement(
 
     case "mp-4.1": {
       if (agents.length === 0) return fail(id, "No agents registered — no component inventory", "Register agents with their tools list");
-      const withTools = agents.filter((a) => a.tools.length > 0);
+      const withTools = agents.filter((a) => a.tools && a.tools.length > 0);
       if (withTools.length === agents.length) return ok(id, `${agents.length} agent(s) enumerate the third-party tools they invoke`);
       return partial(id, `${withTools.length}/${agents.length} agents enumerate their tools`, "Declare the tools list on every agent registration");
     }
@@ -151,7 +151,7 @@ export async function assessGenAiRequirement(
       return partial(id, "Kill switch registered but not every agent has an owner", "Set an owner on every agent so deactivation responsibility is assigned");
     }
     case "mg-3.1": {
-      const withTools = agents.filter((a) => a.tools.length > 0);
+      const withTools = agents.filter((a) => a.tools && a.tools.length > 0);
       const inventoried = agents.length > 0 && withTools.length === agents.length;
       if (hasSupplyChain && inventoried) return ok(id, "Third-party tools are inventoried per agent and gated by a supply-chain policy");
       if (hasSupplyChain || inventoried) return partial(id, hasSupplyChain ? "Supply-chain policy registered but tool inventories are incomplete" : "Tools inventoried but no supply-chain policy controls them at call time", "Register createSupplyChainPolicy({ approvedTools }) and declare tools on every agent");

@@ -135,6 +135,10 @@ is exactly what it does and does not do:
 One repository, four packages. Three are private workspaces under a
 placeholder scope; `governance-sdk` is the only publishable unit and is what
 you install. The layering between them is a build constraint, not a convention.
+The published tarball is self-contained: `npm run pack` stages the three
+scoped packages inside it, because npm does not bundle workspace links on its
+own, and `npm run verify-pack` installs that tarball into a fresh project and
+imports every subpath. CI runs both.
 
 | Package | Depends on | What it is |
 |---------|-----------|------------|
@@ -816,7 +820,7 @@ import { mapToCsaAicm }      from 'governance-sdk/csa-aicm';        // 18 domain
 import { mapToImdaAgentic }  from 'governance-sdk/imda-agentic';    // four pillars, 17 requirements
 
 const report = await mapToEuAiAct({
-  governance: gov, agents: [agent],
+  governance: gov, agents: await gov.storage.listAgents(),
   auditIntegrity: true, humanOversight: true,
 });
 // report.disclaimer — embedded "not legal advice" notice
