@@ -14,8 +14,19 @@
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
     "noUnusedLocals": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+    "noUncheckedIndexedAccess": true,
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ]
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts", "dist", "node_modules"]
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "src/**/*.test.ts",
+    "dist",
+    "node_modules"
+  ]
 }

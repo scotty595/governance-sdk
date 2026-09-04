@@ -50,7 +50,7 @@ import type {
   VercelStreamResult,
 } from "./vercel-ai-stream.js";
 import type { StreamMode } from "./pre-post-stream.js";
-import { extractLastText, partsToText, replaceLastText } from "./text-extract.js";
+import { extractLastText, partsToText, replaceContentText, replaceLastText } from "./text-extract.js";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -209,12 +209,7 @@ function replaceGenerateText(
   const next: VercelGenerateResult = { ...result };
   if (typeof result.text === "string") next.text = newText;
   if (Array.isArray(result.content)) {
-    const [replaced] = replaceLastText(
-      [{ role: "assistant", content: result.content }],
-      newText,
-      "assistant",
-    );
-    next.content = replaced.content as VercelGenerateResult["content"];
+    next.content = replaceContentText(result.content, newText) as VercelGenerateResult["content"];
   }
   return next;
 }

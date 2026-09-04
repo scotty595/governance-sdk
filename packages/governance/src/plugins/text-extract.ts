@@ -83,13 +83,19 @@ export function replaceLastText<M extends TextMessage>(
   for (let i = out.length - 1; i >= 0; i--) {
     const msg = out[i];
     if (msg?.role !== role) continue;
-    out[i] = { ...msg, content: replaceInContent(msg.content, text) } as M;
+    out[i] = { ...msg, content: replaceContentText(msg.content, text) } as M;
     return out;
   }
   return out;
 }
 
-function replaceInContent(content: unknown, text: string): unknown {
+/**
+ * The single-payload form of {@link replaceLastText}: rewrite one message's
+ * content, preserving its shape. Adapters that hold a lone assistant message
+ * (a response envelope, a LangChain instance) use this instead of wrapping it
+ * in a one-element array and unwrapping the result.
+ */
+export function replaceContentText(content: unknown, text: string): unknown {
   if (typeof content === "string") return text;
   if (Array.isArray(content)) return replaceInParts(content, text);
   if (content && typeof content === "object") {

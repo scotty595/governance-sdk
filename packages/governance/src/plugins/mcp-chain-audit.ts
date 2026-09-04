@@ -139,16 +139,7 @@ function buildCallRecorder(config: ChainAuditConfig = {}) {
 
     /** Get cross-server transitions (tool calls that span different MCP servers) */
     getCrossServerTransitions(agentId: string): Array<{ from: ChainEntry; to: ChainEntry }> {
-      const chain = chains.get(agentId) ?? [];
-      const transitions: Array<{ from: ChainEntry; to: ChainEntry }> = [];
-
-      for (let i = 1; i < chain.length; i++) {
-        if (chain[i].server !== chain[i - 1].server) {
-          transitions.push({ from: chain[i - 1], to: chain[i] });
-        }
-      }
-
-      return transitions;
+      return crossServerTransitions(chains.get(agentId) ?? []);
     },
 
     /** Clear chain for an agent */
@@ -161,13 +152,37 @@ function buildCallRecorder(config: ChainAuditConfig = {}) {
       const chain = chains.get(agentId) ?? [];
       const servers = new Set(chain.map((c) => c.server));
       const tools = new Set(chain.map((c) => c.tool));
-      let transitions = 0;
-      for (let i = 1; i < chain.length; i++) {
-        if (chain[i].server !== chain[i - 1].server) transitions++;
-      }
-      return { length: chain.length, servers: servers.size, tools: tools.size, crossServerTransitions: transitions };
+      return {
+        length: chain.length,
+        servers: servers.size,
+        tools: tools.size,
+        crossServerTransitions: crossServerTransitions(chain).length,
+      };
     },
   };
+}
+
+/**
+ * Adjacent pairs of calls that crossed an MCP server boundary.
+ *
+ * The chain is caller-driven — every entry arrives through `recordCall()` —
+ * so a gap in it means the caller did not report that hop. A hop with a
+ * missing end is not evidence of a server change, so it yields no transition
+ * and is not counted: an unreported call never invents a boundary crossing.
+ * `getCrossServerTransitions` and `stats` share this walk so both answer the
+ * same question the same way.
+ */
+function crossServerTransitions(
+  chain: readonly ChainEntry[],
+): Array<{ from: ChainEntry; to: ChainEntry }> {
+  const transitions: Array<{ from: ChainEntry; to: ChainEntry }> = [];
+  for (let i = 1; i < chain.length; i++) {
+    const from = chain[i - 1];
+    const to = chain[i];
+    if (!from || !to) continue;
+    if (from.server !== to.server) transitions.push({ from, to });
+  }
+  return transitions;
 }
 
 // ─── Pattern Matching ───────────────────────────────────────

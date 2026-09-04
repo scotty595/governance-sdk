@@ -88,7 +88,9 @@ export function parseRetryAfter(
  */
 export function retryDelayMs(retriesMade: number, error: unknown, maxWaitMs: number): number {
   const index = Math.min(Math.max(0, retriesMade), RETRY_DELAYS_MS.length - 1);
-  const backoff = RETRY_DELAYS_MS[index];
+  // The index is clamped into the schedule, so the fallback is unreachable;
+  // it exists so an emptied schedule degrades to "wait the cap" rather than NaN.
+  const backoff = RETRY_DELAYS_MS[index] ?? MAX_RETRY_WAIT_MS;
   const hinted = error instanceof RemoteEnforcementError ? error.retryAfterMs : undefined;
   return Math.max(0, Math.min(hinted ?? backoff, maxWaitMs));
 }

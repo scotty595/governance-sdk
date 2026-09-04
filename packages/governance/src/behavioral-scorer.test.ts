@@ -37,6 +37,20 @@ describe("computeSignals", () => {
     assert.equal(signals.lastActivityAt, null);
   });
 
+  // `slice(-windowSize)` with a negative windowSize slices from the front and
+  // can select nothing; reading the window's first event then threw.
+  it("returns zeroes when the window selects no events", () => {
+    const signals = computeSignals({
+      events: makeEvents(3),
+      declaredTools: [],
+      config: { windowSize: -10 },
+    });
+    assert.equal(signals.totalEvents, 0);
+    assert.equal(signals.blockRate, 0);
+    assert.equal(signals.eventFrequency, 0);
+    assert.equal(signals.lastActivityAt, null);
+  });
+
   it("computes recency-weighted block rate", () => {
     const events = [
       ...makeEvents(7),

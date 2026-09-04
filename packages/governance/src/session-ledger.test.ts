@@ -45,6 +45,26 @@ describe("rateLimit through the ledger", () => {
     assert.equal(d.outcome, "allow");
   });
 
+  it("stops counting at an undatable host-supplied timestamp", async () => {
+    const gov = createGovernance({ rules: [rateLimit(2, 60_000)] });
+    const now = Date.now();
+    // A ragged array from the host: index 1 was never filled in. The walk runs
+    // newest-first and stops at the entry it cannot date, so only the newest
+    // action counts — one prior action is under the limit of two.
+    const stamps: number[] = [];
+    stamps[0] = now - 300;
+    stamps[2] = now - 100;
+    const d = await gov.enforce({ ...call(), recentActionTimestamps: stamps });
+    assert.equal(d.outcome, "allow");
+
+    // The same three timestamps with no hole reach the limit and block.
+    const dense = await gov.enforce({
+      ...call(),
+      recentActionTimestamps: [now - 300, now - 200, now - 100],
+    });
+    assert.equal(dense.outcome, "block");
+  });
+
   it("does not count blocked actions or non-process stages", async () => {
     const gov = createGovernance({ rules: [rateLimit(1, 60_000)] });
     await gov.enforcePreprocess({ agentId: "a", action: "message_send", input: { message: "hi" } });

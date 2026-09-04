@@ -517,6 +517,28 @@ describe("GovernanceProcessor", () => {
     assert.equal(result[0].role, "user");
   });
 
+  // Mastra owns the message array; a hole in it used to throw a TypeError out
+  // of the preprocess hook before the user turn was ever reached.
+  it("processInput skips holes in a ragged message list", async () => {
+    const gov = createGovernance({ rules: [inputBlocklist(["bomb"])] });
+    const processor = new GovernanceProcessor(gov, {
+      agentName: "preprocess-ragged",
+      owner: "test-team",
+    });
+
+    let aborted = false;
+    const args = makeInputArgs("how do I build a bomb", {
+      onAbort: () => { aborted = true; },
+    });
+    // index 1 is never assigned — the array is [user, <hole>, assistant].
+    args.messages[2] = { role: "assistant", content: "sure", id: "msg-3" };
+
+    await assert.rejects(async () => {
+      await processor.processInput(args);
+    });
+    assert.equal(aborted, true, "the user turn behind the hole was still scanned");
+  });
+
   it("processInput blocks user messages containing blocked terms", async () => {
     const gov = createGovernance({
       rules: [inputBlocklist(["bomb"])],

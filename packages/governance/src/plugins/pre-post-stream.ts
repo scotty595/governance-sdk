@@ -179,8 +179,11 @@ async function* runBuffered<ChunkT>(
   // On mask, emit a single replacement chunk if the adapter supplied a
   // builder; otherwise emit original chunks (the onMask callback has already
   // fired via handleOutcome so the adapter knows about the masked text).
-  if (options.buildMaskedChunk && chunks.length > 0) {
-    yield options.buildMaskedChunk(chunks[0], result.text);
+  // The masked chunk is built from the first chunk the provider actually sent;
+  // with none there is nothing to rebuild from, so nothing is emitted.
+  const firstChunk = chunks[0];
+  if (options.buildMaskedChunk && firstChunk !== undefined) {
+    yield options.buildMaskedChunk(firstChunk, result.text);
     return;
   }
   for (const c of chunks) yield c;
@@ -235,7 +238,11 @@ async function* runSliding<ChunkT>(
     window.push(chunk);
     windowTexts.push(options.extractText(chunk));
 
-    while (shouldFlush(window.length, windowTexts, lookbackChunks, lookbackChars)) {
+    // `window.length > 0` is load-bearing, not belt-and-braces: a caller can
+    // configure a lookback that is never satisfied (a negative
+    // streamLookbackChunks or streamLookbackChars), and without this the loop
+    // would keep flushing an empty window forever.
+    while (window.length > 0 && shouldFlush(window.length, windowTexts, lookbackChunks, lookbackChars)) {
       yield* flushOldest(governance, window, windowTexts, options, streamId, sliceCounter);
     }
   }
@@ -256,8 +263,9 @@ async function* runSliding<ChunkT>(
     for (const c of window) yield c;
     return;
   }
-  if (options.buildMaskedChunk && window.length > 0) {
-    yield options.buildMaskedChunk(window[0], result.text);
+  const oldestHeld = window[0];
+  if (options.buildMaskedChunk && oldestHeld !== undefined) {
+    yield options.buildMaskedChunk(oldestHeld, result.text);
     return;
   }
   for (const c of window) yield c;
@@ -289,37 +297,39 @@ async function* flushOldest<ChunkT>(
   // Scan the full lookback window (oldest + lookback tail) before flushing
   // the oldest chunk. This gives the scanner context straddling boundaries.
   const scanText = windowTexts.join("");
-  if (!scanText) {
-    const oldest = window.shift()!;
-    windowTexts.shift();
+
+  // Take the oldest held chunk. Iterating the splice result *is* the emptiness
+  // check — an empty window has no oldest chunk, so it flushes nothing instead
+  // of emitting an undefined chunk the adapters would then try to read text
+  // from.
+  for (const oldest of window.splice(0, 1)) {
+    windowTexts.splice(0, 1);
+
+    if (!scanText) {
+      yield oldest;
+      return;
+    }
+
+    const result = await enforcePostprocess(governance, scanText, {
+      ...withStreamMeta(options, streamId, sliceCounter.value++),
+      toolName: options.toolName ?? "stream:sliding",
+    });
+
+    if (result.text === scanText) {
+      yield oldest;
+      return;
+    }
+
+    // Mask outcome: collapse the entire held window into a single masked chunk
+    // and emit it now, clearing the window so we don't double-scan.
+    if (options.buildMaskedChunk) {
+      yield options.buildMaskedChunk(oldest, result.text);
+      window.length = 0;
+      windowTexts.length = 0;
+      return;
+    }
+    // No masked-chunk builder — yield the oldest as-is; callback-level onMask
+    // has already fired inside enforcePostprocess.
     yield oldest;
-    return;
   }
-
-  const result = await enforcePostprocess(governance, scanText, {
-    ...withStreamMeta(options, streamId, sliceCounter.value++),
-    toolName: options.toolName ?? "stream:sliding",
-  });
-
-  const oldest = window.shift()!;
-  const oldestText = windowTexts.shift()!;
-
-  if (result.text === scanText) {
-    yield oldest;
-    return;
-  }
-
-  // Mask outcome: collapse the entire held window into a single masked chunk
-  // and emit it now, clearing the window so we don't double-scan.
-  if (options.buildMaskedChunk) {
-    yield options.buildMaskedChunk(oldest, result.text);
-    window.length = 0;
-    windowTexts.length = 0;
-    return;
-  }
-  // No masked-chunk builder — yield the oldest as-is; callback-level onMask
-  // has already fired inside enforcePostprocess.
-  yield oldest;
-  // Suppress: oldestText unused outside this scope
-  void oldestText;
 }

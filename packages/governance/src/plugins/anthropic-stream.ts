@@ -182,18 +182,23 @@ async function* scanAndInterleave(
     scanned.push(ev);
   }
 
+  // The scanner may emit fewer events than it was given (buffered mode
+  // collapses a run of deltas into one). Each text slot takes the next scanned
+  // event if there is one; leftovers are flushed after the schedule runs out.
   let scannedCursor = 0;
   for (const step of schedule) {
     if (step.kind === "passthrough") {
       yield step.event;
       continue;
     }
-    if (scannedCursor < scanned.length) {
-      yield scanned[scannedCursor++];
+    const next = scanned[scannedCursor];
+    if (next !== undefined) {
+      scannedCursor++;
+      yield next;
     }
   }
-  while (scannedCursor < scanned.length) {
-    yield scanned[scannedCursor++];
+  for (const leftover of scanned.slice(scannedCursor)) {
+    yield leftover;
   }
 }
 

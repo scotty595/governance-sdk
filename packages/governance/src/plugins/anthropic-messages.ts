@@ -33,7 +33,7 @@
 import type { GovernanceInstance } from "../index";
 import type { OutcomeCallbacks } from "./outcome-handler.js";
 import { enforcePreprocess, enforcePostprocess } from "./pre-post-enforce.js";
-import { extractLastText, partsToText, replaceLastText } from "./text-extract.js";
+import { extractLastText, partsToText, replaceContentText, replaceLastText } from "./text-extract.js";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -153,10 +153,6 @@ function replaceAssistantText(
   newText: string,
 ): AnthropicMessage {
   if (!Array.isArray(message.content)) return message;
-  const [replaced] = replaceLastText(
-    [{ role: "assistant", content: message.content }],
-    newText,
-    "assistant",
-  );
-  return { ...message, content: replaced.content as AnthropicMessage["content"] };
+  const content = replaceContentText(message.content, newText);
+  return { ...message, content: content as AnthropicMessage["content"] };
 }

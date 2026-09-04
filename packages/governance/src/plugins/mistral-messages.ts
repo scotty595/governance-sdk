@@ -19,7 +19,7 @@ import type { OutcomeCallbacks } from "./outcome-handler.js";
 import { enforcePreprocess, enforcePostprocess } from "./pre-post-enforce.js";
 import { enforcePostprocessStream } from "./pre-post-stream.js";
 import type { StreamMode } from "./pre-post-stream.js";
-import { contentToText, extractLastText, replaceLastText } from "./text-extract.js";
+import { contentToText, extractLastText, replaceContentText, replaceLastText } from "./text-extract.js";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -229,8 +229,7 @@ function replaceResponseText(
     if (i !== 0) return c;
     const msg = c.message ?? {};
     if (msg.content == null) return { ...c, message: { ...msg, content: newText } };
-    const [replaced] = replaceLastText([{ role: "assistant", content: msg.content }], newText, "assistant");
-    return { ...c, message: { ...msg, content: replaced.content } };
+    return { ...c, message: { ...msg, content: replaceContentText(msg.content, newText) } };
   });
   return { ...response, choices };
 }

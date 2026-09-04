@@ -94,4 +94,22 @@ describe("MCP Chain Audit", () => {
     assert.equal(stats.tools, 2);
     assert.equal(stats.crossServerTransitions, 1);
   });
+
+  // Both answers come from one walk; this pins them together on a chain that
+  // crosses back and forth.
+  it("stats and getCrossServerTransitions count the same transitions", () => {
+    const auditor = createChainAuditor();
+    const servers = ["mcp://a", "mcp://a", "mcp://b", "mcp://a", "mcp://c", "mcp://c"];
+    for (const [i, server] of servers.entries()) {
+      auditor.recordCall({ server, tool: `t${i}`, agentId: "bot" });
+    }
+
+    const transitions = auditor.getCrossServerTransitions("bot");
+    assert.equal(transitions.length, 3);
+    assert.equal(auditor.stats("bot").crossServerTransitions, transitions.length);
+    assert.deepEqual(
+      transitions.map((t) => [t.from.server, t.to.server]),
+      [["mcp://a", "mcp://b"], ["mcp://b", "mcp://a"], ["mcp://a", "mcp://c"]],
+    );
+  });
 });

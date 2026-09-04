@@ -113,8 +113,11 @@ function extractLastHumanText(input: LangChainMessage[] | string): string {
   if (typeof input === "string") return input;
   if (!Array.isArray(input)) return "";
   for (let i = input.length - 1; i >= 0; i--) {
-    if (!isHuman(input[i])) continue;
-    return messageToText(input[i]);
+    // The array is caller-built; a hole in it is not a human turn, so skip it
+    // rather than reading `_getType` off undefined.
+    const msg = input[i];
+    if (!msg || !isHuman(msg)) continue;
+    return messageToText(msg);
   }
   return "";
 }
@@ -155,8 +158,9 @@ function replaceLastHumanText(
   if (!Array.isArray(input)) return input;
   const next = input.map((m) => cloneMessage(m));
   for (let i = next.length - 1; i >= 0; i--) {
-    if (!isHuman(next[i])) continue;
-    setMessageText(next[i], newText);
+    const msg = next[i];
+    if (!msg || !isHuman(msg)) continue;
+    setMessageText(msg, newText);
     break;
   }
   return next;

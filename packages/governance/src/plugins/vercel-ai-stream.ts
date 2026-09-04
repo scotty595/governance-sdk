@@ -139,8 +139,9 @@ function wrapStreamWithGovernance(
   let pendingOutput: Promise<IteratorResult<VercelStreamPart>> | null = null;
 
   const releaseHeld = (): void => {
-    while (held.length > 0 && held[0].afterText <= consumed) {
-      ready.push(held.shift()!.part);
+    for (let next = held[0]; next !== undefined && next.afterText <= consumed; next = held[0]) {
+      held.shift();
+      ready.push(next.part);
     }
   };
 

@@ -63,6 +63,20 @@ describe("langchain-model — preprocess", () => {
     assert.equal(called, false);
   });
 
+  // The message array comes from user code; a hole in it used to throw a
+  // TypeError out of `_getType()` before the human turn was reached.
+  it("skips holes in a ragged message array", async () => {
+    const { gov, agentId } = await registerAgent([inputBlocklist(["forbidden"])]);
+    const model = fakeModel("x");
+    const guarded = wrapChatModel(model, gov, { agentId });
+
+    const messages: LangChainMessage[] = [];
+    messages[0] = new FakeHumanMessage("please do forbidden now");
+    messages[2] = new FakeAIMessage("sure"); // index 1 is a hole
+
+    await assert.rejects(() => guarded.invoke(messages), GovernanceBlockedError);
+  });
+
   it("accepts raw string input", async () => {
     const { gov, agentId } = await registerAgent([inputBlocklist(["nope"])]);
     const model = fakeModel("x");

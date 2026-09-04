@@ -150,13 +150,14 @@ export class GovernanceProcessor implements MastraProcessorInterface {
       const decision = await this.evaluateToolCall(toolCall, args);
 
       this.stats.totalProcessed++;
-      if (!this.stats.byTool[toolCall.toolName]) {
-        this.stats.byTool[toolCall.toolName] = { allowed: 0, blocked: 0 };
-      }
+      // Bind the per-tool counter once: the record is keyed by a framework-
+      // supplied tool name, so the lookup is the same open question every time.
+      const toolStats = this.stats.byTool[toolCall.toolName] ?? { allowed: 0, blocked: 0 };
+      this.stats.byTool[toolCall.toolName] = toolStats;
 
       if (decision.blocked) {
         this.stats.totalBlocked++;
-        this.stats.byTool[toolCall.toolName].blocked++;
+        toolStats.blocked++;
         this.config.onBlocked?.(decision, toolCall);
 
         // Notify approval-required separately so integrators can branch on it
@@ -185,7 +186,7 @@ export class GovernanceProcessor implements MastraProcessorInterface {
         }
       } else {
         this.stats.totalAllowed++;
-        this.stats.byTool[toolCall.toolName].allowed++;
+        toolStats.allowed++;
       }
 
       this.config.onDecision?.(decision, toolCall);
@@ -531,8 +532,10 @@ export class GovernanceProcessor implements MastraProcessorInterface {
    */
   private extractUserText(messages: MastraMessage[]): string {
     for (let i = messages.length - 1; i >= 0; i--) {
+      // Mastra hands us the list; a hole in it carries no role and no text, so
+      // it is skipped rather than crashing the preprocess hook.
       const msg = messages[i];
-      if (msg.role !== "user") continue;
+      if (!msg || msg.role !== "user") continue;
       return this.messageContentToText(msg.content);
     }
     return "";
@@ -610,8 +613,9 @@ export class GovernanceProcessor implements MastraProcessorInterface {
    */
   private mutateLastAssistantMessage(messages: MastraMessage[], newText: string): void {
     for (let i = messages.length - 1; i >= 0; i--) {
+      // As in extractUserText: a hole is not the assistant turn we are masking.
       const msg = messages[i];
-      if (msg.role !== "assistant") continue;
+      if (!msg || msg.role !== "assistant") continue;
 
       // Shape #1: Plain string content
       if (typeof msg.content === "string") {

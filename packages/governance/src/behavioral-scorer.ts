@@ -101,17 +101,21 @@ export function computeSignals(input: BehavioralInput): BehavioralSignals {
   const windowSize = config?.windowSize ?? 200;
   const recencyBias = config?.recencyBias ?? 0.7;
 
-  if (events.length === 0) {
+  // Window: only consider the most recent N events
+  const sortedByTime = [...events].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const windowed = sortedByTime.slice(-windowSize);
+
+  // No events in the window — either none were supplied, or a configured
+  // windowSize below zero sliced past the end. Nothing to score either way.
+  const oldest = windowed[0];
+  const newest = windowed[windowed.length - 1];
+  if (!oldest || !newest) {
     return {
       totalEvents: 0, blockRate: 0, approvalRate: 0, injectionHits: 0,
       uniqueToolsObserved: [], undeclaredTools: [], eventFrequency: 0,
       lastActivityAt: null,
     };
   }
-
-  // Window: only consider the most recent N events
-  const sortedByTime = [...events].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  const windowed = sortedByTime.slice(-windowSize);
 
   // Recency-weighted block rate: more recent events have higher weight.
   // With recencyBias=0.7, the most recent event has 1.0 weight,
@@ -120,17 +124,17 @@ export function computeSignals(input: BehavioralInput): BehavioralSignals {
   // Kill switch blocks are excluded — they reflect admin action, not agent behavior.
   let weightedBlocked = 0;
   let totalWeight = 0;
-  for (let i = 0; i < windowed.length; i++) {
-    const detail = windowed[i].detail as Record<string, unknown> | undefined;
+  for (const [i, event] of windowed.entries()) {
+    const detail = event.detail as Record<string, unknown> | undefined;
     const ruleId = (detail?.ruleId as string) ?? "";
-    const isKillSwitch = windowed[i].outcome === "kill_switch"
+    const isKillSwitch = event.outcome === "kill_switch"
       || ruleId.startsWith("__kill_switch__");
     if (isKillSwitch) continue; // don't count kill switch blocks
 
     const position = i / Math.max(1, windowed.length - 1); // 0 (oldest) to 1 (newest)
     const weight = (1 - recencyBias) + recencyBias * position;
     totalWeight += weight;
-    if (windowed[i].outcome === "block") weightedBlocked += weight;
+    if (event.outcome === "block") weightedBlocked += weight;
   }
   const blockRate = totalWeight > 0 ? weightedBlocked / totalWeight : 0;
 
@@ -158,8 +162,8 @@ export function computeSignals(input: BehavioralInput): BehavioralSignals {
   const undeclared = [...observedTools].filter((t) => !declaredSet.has(t));
 
   // Event frequency (events per day)
-  const first = new Date(windowed[0].createdAt).getTime();
-  const last = new Date(windowed[windowed.length - 1].createdAt).getTime();
+  const first = new Date(oldest.createdAt).getTime();
+  const last = new Date(newest.createdAt).getTime();
   const daySpan = Math.max(1, (last - first) / (1000 * 60 * 60 * 24));
   const frequency = windowed.length / daySpan;
 
@@ -171,7 +175,7 @@ export function computeSignals(input: BehavioralInput): BehavioralSignals {
     uniqueToolsObserved: [...observedTools],
     undeclaredTools: undeclared,
     eventFrequency: Math.round(frequency * 10) / 10,
-    lastActivityAt: windowed[windowed.length - 1].createdAt,
+    lastActivityAt: newest.createdAt,
   };
 }
 

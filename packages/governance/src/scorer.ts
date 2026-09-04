@@ -19,7 +19,9 @@ import { DIMENSION_SCORERS } from "./scorer-dimensions.js";
 
 // ─── Governance Levels ──────────────────────────────────────────
 
-const GOVERNANCE_LEVELS: GovernanceLevel[] = [
+// A non-empty tuple: level 0 is the floor every unmatched score falls back to,
+// so the fallback below needs no assertion.
+const GOVERNANCE_LEVELS: [GovernanceLevel, ...GovernanceLevel[]] = [
   { level: 0, label: "Unregistered", autonomy: "No autonomous operation", minScore: 0, maxScore: 20 },
   { level: 1, label: "Basic", autonomy: "Human-in-loop required", minScore: 21, maxScore: 40 },
   { level: 2, label: "Managed", autonomy: "Limited autonomous actions", minScore: 41, maxScore: 60 },
@@ -139,13 +141,16 @@ export function assessFleet(
     : 0;
 
   const sorted = [...assessments].sort((a, b) => b.compositeScore - a.compositeScore);
+  const highest = sorted[0];
+  const lowest = sorted[sorted.length - 1];
 
   const fleetRecommendations: string[] = [];
   if (byStatus.flagged > 0) {
     fleetRecommendations.push(`${byStatus.flagged} agent(s) below governance threshold — review immediately`);
   }
-  if (byLevel[0] > 0) {
-    fleetRecommendations.push(`${byLevel[0]} agent(s) at Level 0 (Unregistered) — complete registration`);
+  const unregistered = byLevel[0] ?? 0;
+  if (unregistered > 0) {
+    fleetRecommendations.push(`${unregistered} agent(s) at Level 0 (Unregistered) — complete registration`);
   }
   if (avgScore < 60) {
     fleetRecommendations.push("Fleet average below 60 — prioritize governance improvements before scaling");
@@ -160,8 +165,8 @@ export function assessFleet(
       byStatus,
       byFramework: byFramework as Record<import("./types").AgentFramework, number>,
       byLevel,
-      highestScoring: sorted[0] ? { name: sorted[0].agentName, score: sorted[0].compositeScore } : null,
-      lowestScoring: sorted.length > 0 ? { name: sorted[sorted.length - 1].agentName, score: sorted[sorted.length - 1].compositeScore } : null,
+      highestScoring: highest ? { name: highest.agentName, score: highest.compositeScore } : null,
+      lowestScoring: lowest ? { name: lowest.agentName, score: lowest.compositeScore } : null,
       recommendations: fleetRecommendations,
     },
   };

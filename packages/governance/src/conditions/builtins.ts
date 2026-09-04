@@ -150,7 +150,12 @@ export function getBuiltinConditions(
           const since = Date.now() - windowMs;
           let inWindow = 0;
           for (let i = stamps.length - 1; i >= 0; i--) {
-            if (stamps[i] >= since) inWindow++;
+            // Host-supplied timestamps, newest last. A non-number (a hole in a
+            // sparse array, a malformed entry) cannot be shown to fall inside
+            // the window, so it ends the walk exactly like an older stamp does
+            // — a rate limit never counts an action it cannot date.
+            const at = stamps[i];
+            if (typeof at === "number" && at >= since) inWindow++;
             else break;
           }
           return inWindow >= maxActions;

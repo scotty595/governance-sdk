@@ -240,6 +240,65 @@ describe("pre-post-stream — sliding mode", () => {
     assert.equal(out.length, 3);
     assert.deepEqual(out.map((c) => c.text), ["aaaaa", "bbbbb", "ccccc"]);
   });
+
+  // A lookback that can never hold anything used to flush an already-empty
+  // window forever, emitting an unbounded run of undefined chunks. The window
+  // is now only flushed when it holds something.
+  it("a negative chunk lookback still terminates, emitting each chunk once", async () => {
+    const { gov, agentId } = await registerAgent();
+    const chunks: TextChunk[] = [{ text: "a" }, { text: "b" }, { text: "c" }];
+    const out = await collect(
+      enforcePostprocessStream(gov, toStream(chunks), {
+        agentId,
+        streamMode: "sliding",
+        streamLookbackChunks: -1,
+        extractText,
+      }),
+    );
+    assert.deepEqual(out.map((c) => c.text), ["a", "b", "c"]);
+    assert.ok(out.every((c) => c !== undefined), "no undefined chunk is emitted");
+  });
+
+  it("a negative char lookback still terminates, emitting each chunk once", async () => {
+    const { gov, agentId } = await registerAgent();
+    const chunks: TextChunk[] = [{ text: "a" }, { text: "b" }];
+    const out = await collect(
+      enforcePostprocessStream(gov, toStream(chunks), {
+        agentId,
+        streamMode: "sliding",
+        streamLookbackChars: -1,
+        extractText,
+      }),
+    );
+    assert.deepEqual(out.map((c) => c.text), ["a", "b"]);
+  });
+
+  it("an empty stream emits nothing in sliding mode", async () => {
+    const { gov, agentId } = await registerAgent();
+    const out = await collect(
+      enforcePostprocessStream(gov, toStream<TextChunk>([]), {
+        agentId,
+        streamMode: "sliding",
+        streamLookbackChunks: 2,
+        extractText,
+        buildMaskedChunk: buildMasked,
+      }),
+    );
+    assert.deepEqual(out, []);
+  });
+
+  it("an empty stream emits nothing in buffered mode", async () => {
+    const { gov, agentId } = await registerAgent();
+    const out = await collect(
+      enforcePostprocessStream(gov, toStream<TextChunk>([]), {
+        agentId,
+        streamMode: "buffered",
+        extractText,
+        buildMaskedChunk: buildMasked,
+      }),
+    );
+    assert.deepEqual(out, []);
+  });
 });
 
 describe("pre-post-stream — default mode", () => {

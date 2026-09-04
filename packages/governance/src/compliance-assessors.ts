@@ -64,8 +64,8 @@ export async function assessEuAiActRequirement(
     }
     case "art12-traceability": {
       const events = await governance.audit.query({ limit: 1 });
-      if (events.length > 0) {
-        const e = events[0];
+      const e = events[0];
+      if (e) {
         if (e.agentId && e.eventType && e.outcome && e.createdAt)
           return ok(req.id, "Audit events contain agent ID, event type, outcome, and timestamp");
       }
