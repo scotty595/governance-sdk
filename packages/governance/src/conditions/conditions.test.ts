@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createPolicyEngine } from "../policy.js";
+import { createPolicyEngine } from "../policy-entry.js";
 import type { EnforcementContext } from "../policy.js";
 import {
   inputBlocklist, inputLength, inputPattern,

@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { createPolicyEngine, getScanText, type PolicyRule, type EnforcementContext } from "./policy.js";
+import { createPolicyEngine } from "./policy-entry.js";
+import { getScanText, type PolicyRule, type EnforcementContext } from "./policy.js";
 import { conditionSupportsModalities } from "./scan/multi-modal.js";
 
 /**

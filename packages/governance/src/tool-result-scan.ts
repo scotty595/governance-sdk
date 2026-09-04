@@ -28,7 +28,7 @@
  *   - Any future framework adapter that intercepts tool returns
  */
 
-import type { GovernanceInstance } from "./index.js";
+import type { GovernanceInstance } from "./governance.js";
 import type { EnforcementContext, EnforcementDecision } from "./policy.js";
 import { detectInjection } from "./injection-detect.js";
 import { markTaint, type TaintMark } from "./taint.js";

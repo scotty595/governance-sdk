@@ -21,7 +21,7 @@
  * ```
  */
 
-import type { GovernanceInstance, ActionOutcome } from "./index.js";
+import type { ActionOutcome, GovernanceInstance } from "./governance.js";
 
 export interface RunWithOutcomeOptions {
   agentId: string;

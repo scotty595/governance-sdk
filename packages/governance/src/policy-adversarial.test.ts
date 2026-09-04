@@ -12,7 +12,7 @@ import {
   createPolicyEngine,
   type PolicyRule,
   type EnforcementContext,
-} from "./policy";
+} from "./policy-entry.js";
 
 const ctx: EnforcementContext = {
   agentId: "test-agent",

@@ -19,7 +19,8 @@
  * Reference: https://www.nist.gov/artificial-intelligence/ai-risk-management-framework
  */
 
-import type { StoredAgent, GovernanceInstance } from "./index.js";
+import type { GovernanceInstance } from "./governance.js";
+import type { StoredAgent } from "./storage.js";
 import type { ComplianceStatus, RequirementAssessment, ArticleAssessment } from "./compliance-articles.js";
 import { NIST_AI_RMF_FUNCTIONS, type NistAiRmfReport } from "./nist-ai-rmf-articles.js";
 

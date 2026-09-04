@@ -35,7 +35,8 @@
 // ─── Types ───────────────────────────────────────────────────────
 
 /** Recognised content modalities. */
-export type Modality = "text" | "image" | "pdf" | "audio";
+import type { Modality } from "./modality-gate.js";
+export type { Modality } from "./modality-gate.js";
 
 /**
  * Pluggable scanner that converts a non-text block into text the
@@ -183,9 +184,7 @@ export const CONDITIONS_SUPPORTING_MODALITIES: ReadonlySet<string> = new Set([
 ]);
 
 /** True when `scanModalities` is meaningful for the given condition type. */
-export function conditionSupportsModalities(conditionType: string): boolean {
-  return CONDITIONS_SUPPORTING_MODALITIES.has(conditionType);
-}
+export { conditionSupportsModalities, MODALITIES } from "./modality-gate.js";
 
 // ─── Registry ────────────────────────────────────────────────────
 

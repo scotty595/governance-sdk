@@ -15,8 +15,8 @@
       "import": "./dist/index.js"
     },
     "./policy": {
-      "types": "./dist/policy.d.ts",
-      "import": "./dist/policy.js"
+      "types": "./dist/policy-entry.d.ts",
+      "import": "./dist/policy-entry.js"
     },
     "./scorer": {
       "types": "./dist/scorer.d.ts",

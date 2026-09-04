@@ -1,16 +1,20 @@
 /**
  * Built-in condition evaluators — registered at engine initialization.
+ *
+ * These are the structural conditions: tool names, action types, tiers,
+ * provenance, budgets, identity, combinators. `injection_guard` and
+ * `sensitive_data_filter` are NOT here — they need a detection corpus, so
+ * they are supplied as kernel extensions by `ext/defaults.ts` and installed
+ * by the package barrel's `createGovernance()`.
  * 27 condition types (the original 25 plus `action_tier` and `tainted_input`), pluggable.
  */
 
 import type { ActionTier, ConditionEvaluator, EnforcementContext, PolicyCondition, PolicyRule } from "../policy.js";
 import { getScanText } from "../policy.js";
 import { hasTaint, type TaintSource } from "../taint.js";
-import { detectInjection } from "../injection-detect.js";
-import type { InjectionCategory } from "../injection-detect.js";
 import { evaluateBlocklist, evaluateInputLength, evaluateInputPattern } from "./preprocess.js";
 import { evaluateNetworkAllowlist, evaluateScopeBoundary, evaluateCostBudget, evaluateConcurrentLimit } from "./process.js";
-import { evaluateOutputLength, evaluateOutputPattern, evaluateSensitiveDataFilter } from "./postprocess.js";
+import { evaluateOutputLength, evaluateOutputPattern } from "./postprocess.js";
 
 /**
  * Extract all string values from a nested object for scanning.
@@ -228,23 +232,6 @@ export function getBuiltinConditions(
     },
     // ─── Input safety (preprocess) ─────────────────────────────
     {
-      name: "injection_guard",
-      description: "Detect prompt injection attacks (regex detector, synchronous)",
-      evaluator: (ctx, p, rule) => {
-        const skip = (p.skipCategories ?? []) as InjectionCategory[];
-        const opts = { threshold: p.threshold as number, skipCategories: skip.length > 0 ? skip : undefined };
-        // When `rule.scanModalities` is set, scan only those modalities'
-        // pre-extracted text from `ctx.textByModality`. Otherwise fall back
-        // to the legacy walk over `ctx.input` so existing rules without
-        // modality config behave identically.
-        const strings = getScanText(ctx, rule) ?? (ctx.input ? extractStrings(ctx.input) : []);
-        for (const str of strings) {
-          if (detectInjection(str, opts).detected) return true;
-        }
-        return false;
-      },
-    },
-    {
       name: "ml_injection_guard",
       description:
         "Consume an ML-classifier score pre-computed by the host. " +
@@ -326,25 +313,6 @@ export function getBuiltinConditions(
           return scan.some((text) => regex.test(text));
         }
         return evaluateOutputPattern(ctx, pattern, flags);
-      },
-    },
-    {
-      name: "sensitive_data_filter",
-      description: "Detect leaked credentials and secrets",
-      evaluator: (ctx, p, rule) => {
-        const patternIds = p.patterns as string[] | undefined;
-        const scan = getScanText(ctx, rule);
-        if (scan) {
-          // Reuse the postprocess helper by temporarily overriding
-          // outputText with each modality's text — keeps a single source
-          // of truth for the sensitive-pattern set.
-          for (const text of scan) {
-            const proxy = { ...ctx, outputText: text } as EnforcementContext;
-            if (evaluateSensitiveDataFilter(proxy, patternIds)) return true;
-          }
-          return false;
-        }
-        return evaluateSensitiveDataFilter(ctx, patternIds);
       },
     },
     // ─── Identity ─────────────────────────────────────────────

@@ -7,8 +7,8 @@
 
 import { getBuiltinConditions } from "./conditions/builtins.js";
 import { getDefaultStage } from "./policy-stage-defaults.js";
-import { maskSensitiveData, maskPattern, maskBlocklistTerms } from "./mask.js";
-import { conditionSupportsModalities, type Modality } from "./scan/multi-modal.js";
+import { maskPattern, maskBlocklistTerms } from "./mask-primitives.js";
+import { conditionSupportsModalities, type Modality } from "./scan/modality-gate.js";
 import { validateRule, assertValidRule } from "./policy-validate.js";
 import { describeRemedy } from "./policy-remedies.js";
 import type { MaskStrategy } from "./plugin.js";
@@ -492,8 +492,10 @@ export function createPolicyEngine(config: PolicyEngineConfig = {}): PolicyEngin
   // the kernel ships; plugins add theirs through registerMaskStrategy(). A
   // condition with no strategy cannot be masked, and the engine says so by
   // failing closed rather than passing the original text through.
+  // `sensitive_data_filter` is deliberately absent: its redaction needs the
+  // detection corpus, so the detect plugin registers it. Without that plugin a
+  // mask rule on it fails closed to `block`, which is the honest outcome.
   const maskStrategies = new Map<string, MaskStrategy>([
-    ["sensitive_data_filter", (text, params) => maskSensitiveData(text, params.patterns as string[] | undefined)],
     ["output_pattern", (text, params) => maskPattern(text, params.pattern as string, params.flags as string | undefined)],
     ["input_pattern", (text, params) => maskPattern(text, params.pattern as string, params.flags as string | undefined)],
     ["blocklist", (text, params) => maskBlocklistTerms(text, params.terms as string[])],

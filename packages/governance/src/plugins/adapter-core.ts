@@ -15,7 +15,8 @@
  * same call.
  */
 
-import type { GovernanceInstance, AuditEvent } from "../index.js";
+import type { GovernanceInstance } from "../governance.js";
+import type { AuditEvent } from "../storage.js";
 import type {
   ActionTier,
   EnforcementContext,

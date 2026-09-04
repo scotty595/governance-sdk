@@ -20,7 +20,7 @@
  * hook, so mixing them never double-scans.
  */
 
-import type { GovernanceInstance } from "../index.js";
+import type { GovernanceInstance } from "../governance.js";
 import { scanToolResult } from "../tool-result-scan.js";
 
 // ─── Types ────────────────────────────────────────────────────

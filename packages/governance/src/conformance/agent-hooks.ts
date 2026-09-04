@@ -36,7 +36,7 @@
  * the warning; that is a property of the contract, not of this mapping.
  */
 
-import type { GovernanceInstance } from "../index.js";
+import type { GovernanceInstance } from "../governance.js";
 import type { EnforcementDecision, PolicyStage } from "../policy.js";
 import { attachAdapterCore, type AdapterCoreConfig, type AdapterCore } from "../plugins/adapter-core.js";
 import { buildRegistration } from "../plugins/adapter-core.js";

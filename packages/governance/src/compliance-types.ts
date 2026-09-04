@@ -6,7 +6,8 @@
  * them via compliance-articles.ts, which re-exports everything here).
  */
 
-import type { StoredAgent, GovernanceInstance } from "./index.js";
+import type { GovernanceInstance } from "./governance.js";
+import type { StoredAgent } from "./storage.js";
 import type { EuAiActAnnex, EuAiActPhase, EuAiActPhasedDeadlines } from "./compliance-schedule.js";
 
 // ─── Shared across standards ─────────────────────────────────

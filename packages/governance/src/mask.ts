@@ -8,7 +8,10 @@
 
 import { getSensitivePatterns } from "./conditions/sensitive-patterns.js";
 
-const REDACTED = "[REDACTED]";
+import { REDACTED } from "./mask-primitives.js";
+
+// Re-exported so `governance-sdk` keeps one masking entry point.
+export { maskPattern, maskBlocklistTerms, REDACTED } from "./mask-primitives.js";
 
 /**
  * System prompt leak patterns only match trigger phrases. For masking,
@@ -64,22 +67,3 @@ function redactSpans(text: string, spans: Array<[number, number]>): string {
  * Mask text matching a custom regex pattern.
  * Used for output_pattern / input_pattern conditions with mask outcome.
  */
-export function maskPattern(text: string, pattern: string, flags?: string): string {
-  const f = flags ?? "";
-  const global = new RegExp(pattern, f.includes("g") ? f : f + "g");
-  return text.replace(global, REDACTED);
-}
-
-/**
- * Mask blocklisted terms in text.
- * Used for blocklist condition with mask outcome.
- */
-export function maskBlocklistTerms(text: string, terms: string[]): string {
-  let result = text;
-  for (const term of terms) {
-    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const regex = new RegExp(escaped, "gi");
-    result = result.replace(regex, REDACTED);
-  }
-  return result;
-}

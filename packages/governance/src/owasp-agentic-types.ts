@@ -30,7 +30,8 @@
  * asi04-approved-tool-registry, asi06-tool-result-scan.
  */
 
-import type { StoredAgent, GovernanceInstance } from "./index.js";
+import type { GovernanceInstance } from "./governance.js";
+import type { StoredAgent } from "./storage.js";
 import type { ComplianceStatus, ArticleAssessment } from "./compliance-articles.js";
 
 // ─── Constants ───────────────────────────────────────────────

@@ -12,7 +12,8 @@
  * Clause definitions are in iso-42001-articles.ts.
  */
 
-import type { StoredAgent, GovernanceInstance } from "./index.js";
+import type { GovernanceInstance } from "./governance.js";
+import type { StoredAgent } from "./storage.js";
 import type { ComplianceStatus, RequirementAssessment, ArticleAssessment } from "./compliance-articles.js";
 import { ISO_42001_CLAUSES, type Iso42001Report } from "./iso-42001-articles.js";
 

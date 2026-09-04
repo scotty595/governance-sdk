@@ -101,24 +101,12 @@ const LOGICAL_EXT = new Set([
  */
 const EXCEPTIONS = new Map([
   [
-    "conditions/builtins.ts -> injection-detect.ts",
-    "The built-in `injection_guard` condition calls the regex detector directly. Removing this needs createPolicyEngine() to install a default plugin set first, or the standalone engine silently loses a condition from its public vocabulary. Phase B.",
-  ],
-  [
-    "policy.ts -> mask.ts",
-    "The engine pre-registers mask strategies for its built-in content conditions, and those reach the shared pattern corpus. Phase B moves the corpus to ext/detect and leaves a registration hook behind.",
-  ],
-  [
     "conditions/postprocess.ts -> conditions/sensitive-patterns.ts",
     "The sensitive-data evaluator reads the corpus directly. Moves with it in Phase B.",
   ],
   [
-    "policy.ts -> scan/multi-modal.ts",
-    "Same gate, reached from getScanText(). Resolve with the above.",
-  ],
-  [
-    "index.ts -> scorer.ts",
-    "register() scores an agent inline. Phase B makes scoring a plugin that subscribes to a registration event instead.",
+    "governance.ts -> scorer.ts",
+    "register() scores an agent inline and returns the score, so scoring cannot be deferred to an async plugin without changing that signature. Resolve by making the scorer a kernel extension like the detector, once the package split proves the shape.",
   ],
   [
     "scoring-hooks.ts -> scorer.ts",
@@ -144,6 +132,7 @@ function walk(dir, out = []) {
 }
 
 function layerOf(rel) {
+  if (META.has(rel)) return "meta";
   if (rel.startsWith(APP_DIR)) return "app";
   if (ADAPTER_DIRS.some((d) => rel.startsWith(d))) return "adapters";
   if (rel.startsWith(EXT_DIR)) return "ext";
@@ -156,7 +145,8 @@ const ALLOWED = {
   core: new Set(["core"]),
   adapters: new Set(["core", "adapters"]),
   ext: new Set(["core", "ext"]),
-  app: new Set(["core", "adapters", "ext", "app"]),
+  app: new Set(["core", "adapters", "ext", "app", "meta"]),
+  meta: new Set(["core", "adapters", "ext", "meta"]),
 };
 
 /**
@@ -166,7 +156,15 @@ const ALLOWED = {
  * `import` in a barrel is still checked: re-exporting ext is the design,
  * depending on it is not.
  */
-const BARRELS = new Set(["index.ts"]);
+const BARRELS = new Set(["index.ts", "policy-entry.ts"]);
+
+/**
+ * The meta-package. It re-exports every layer under one name AND is the only
+ * place that wires the default extension set onto the kernel, so it is the
+ * one file allowed to import ext. In Phase B these become the
+ * `governance-sdk` package and the others become its dependencies.
+ */
+const META = new Set(["index.ts", "policy-entry.ts"]);
 
 /**
  * The one narrow cross-layer import the design allows: an adapter that

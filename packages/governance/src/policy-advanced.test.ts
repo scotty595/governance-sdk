@@ -5,8 +5,8 @@ import {
   blockTools,
   requireSequence,
   timeWindow,
-} from "./policy";
-import type { EnforcementContext, PolicyCondition } from "./policy";
+} from "./policy-entry.js";
+import type { EnforcementContext, PolicyCondition } from "./policy-entry.js";
 
 describe("tool_sequence conditions", () => {
   it("blocks tool when required prior tool was not called", () => {

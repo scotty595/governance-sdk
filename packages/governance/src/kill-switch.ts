@@ -47,7 +47,8 @@
  * ```
  */
 
-import type { GovernanceInstance, AuditEvent } from "./index.js";
+import type { GovernanceInstance } from "./governance.js";
+import type { AuditEvent } from "./storage.js";
 import type { PolicyRule, EnforcementContext } from "./policy.js";
 
 // ─── Types ──────────────────────────────────────────────────────

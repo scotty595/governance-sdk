@@ -3,7 +3,8 @@
  * HMAC-SHA256 hash chaining for audit events. Each event's hash includes
  * the previous hash, making edit/delete/reorder detectable.
  */
-import type { AuditEvent, AuditQueryFilters, GovernanceInstance } from "./index.js";
+import type { GovernanceInstance } from "./governance.js";
+import type { AuditEvent, AuditQueryFilters } from "./storage.js";
 
 /** Integrity metadata attached to each audit event */
 export interface AuditIntegrity {

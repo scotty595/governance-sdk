@@ -10,8 +10,8 @@ import {
   requireLevel,
   requireSequence,
   timeWindow,
-} from "./policy";
-import type { PolicyRule, PolicyCondition, EnforcementContext } from "./policy";
+} from "./policy-entry.js";
+import type { PolicyRule, PolicyCondition, EnforcementContext } from "./policy-entry.js";
 
 // ─── Rule Management ────────────────────────────────────────────
 

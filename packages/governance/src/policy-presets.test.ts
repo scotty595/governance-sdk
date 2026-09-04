@@ -11,8 +11,8 @@ import {
   requireSequence,
   timeWindow,
 } from "./policy-presets";
-import { createPolicyEngine } from "./policy";
-import type { EnforcementContext } from "./policy";
+import { createPolicyEngine } from "./policy-entry.js";
+import type { EnforcementContext } from "./policy-entry.js";
 
 describe("policy preset builders", () => {
   describe("blockTools", () => {

@@ -10,7 +10,8 @@
  * staging environment.
  */
 
-import type { GovernanceInstance, StoredAgent } from "./index.js";
+import type { GovernanceInstance } from "./governance.js";
+import type { StoredAgent } from "./storage.js";
 import type {
   PolicyRule,
   PolicyAction,
