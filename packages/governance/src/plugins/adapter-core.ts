@@ -26,7 +26,7 @@ import type {
 } from "../policy.js";
 import type { AgentRegistration, AgentFramework } from "../types.js";
 import { appendTaint, type TaintMark } from "../taint.js";
-import { scanToolResult, type ScanToolResultInput, type ScanToolResultOutput } from "../tool-result-scan.js";
+import { scanToolResult, type ScanToolResultInput, type ScanToolResultOutput } from "./tool-result-scan.js";
 import { handleOutcome, type OutcomeCallbacks } from "./outcome-handler.js";
 import {
   enforcePreprocess as runPreprocess,

@@ -16,7 +16,7 @@ import { getScanText, extractStrings } from "../policy.js";
 import type { KernelExtensions } from "../governance.js";
 import type { MaskStrategy } from "../plugin.js";
 import { detectInjection, type InjectionCategory } from "../injection-detect.js";
-import { evaluateSensitiveDataFilter } from "../conditions/postprocess.js";
+import { evaluateSensitiveDataFilter } from "./sensitive-filter.js";
 import { maskSensitiveData } from "../mask.js";
 
 /** The regex detector, as the `injection_guard` condition. */

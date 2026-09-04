@@ -21,7 +21,7 @@
  */
 
 import type { GovernanceInstance } from "../governance.js";
-import { scanToolResult } from "../tool-result-scan.js";
+import { scanToolResult } from "./tool-result-scan.js";
 
 // ─── Types ────────────────────────────────────────────────────
 

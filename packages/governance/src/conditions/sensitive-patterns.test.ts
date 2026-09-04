@@ -7,7 +7,7 @@ import {
   matchesSensitivePattern,
   type SensitivePattern,
 } from "./sensitive-patterns";
-import { evaluateSensitiveDataFilter } from "./postprocess";
+import { evaluateSensitiveDataFilter } from "../ext/sensitive-filter.js";
 import { maskSensitiveData } from "../mask";
 
 const ctx = (outputText: string): EnforcementContext => ({ agentId: "a", action: "tool_call", outputText });

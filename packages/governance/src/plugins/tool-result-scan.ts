@@ -1,6 +1,10 @@
 /**
  * Tool-result scanning — shared across framework adapters.
  *
+ * Lives in the adapter layer because it generates the detector signal it then
+ * enforces on, and only an adapter that can see a tool return ever calls it.
+ * Keeping it in the kernel would have meant the kernel importing a detector.
+ *
  * The threat model: a tool's return value (file contents, clipboard text,
  * scraped page, MCP server response) becomes input to the next LLM turn.
  * Untrusted external content can carry prompt injection or sensitive data
@@ -28,10 +32,10 @@
  *   - Any future framework adapter that intercepts tool returns
  */
 
-import type { GovernanceInstance } from "./governance.js";
-import type { EnforcementContext, EnforcementDecision } from "./policy.js";
-import { detectInjection } from "./injection-detect.js";
-import { markTaint, type TaintMark } from "./taint.js";
+import type { GovernanceInstance } from "../governance.js";
+import type { EnforcementContext, EnforcementDecision } from "../policy.js";
+import { detectInjection } from "../injection-detect.js";
+import { markTaint, type TaintMark } from "../taint.js";
 
 /**
  * Redacted result returned to the LLM in place of blocked content.

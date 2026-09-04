@@ -101,10 +101,6 @@ const LOGICAL_EXT = new Set([
  */
 const EXCEPTIONS = new Map([
   [
-    "conditions/postprocess.ts -> conditions/sensitive-patterns.ts",
-    "The sensitive-data evaluator reads the corpus directly. Moves with it in Phase B.",
-  ],
-  [
     "governance.ts -> scorer.ts",
     "register() scores an agent inline and returns the score, so scoring cannot be deferred to an async plugin without changing that signature. Resolve by making the scorer a kernel extension like the detector, once the package split proves the shape.",
   ],
@@ -115,10 +111,6 @@ const EXCEPTIONS = new Map([
   [
     "scoring-hooks.ts -> behavioral-scorer.ts",
     "Same unit.",
-  ],
-  [
-    "tool-result-scan.ts -> injection-detect.ts",
-    "Tool-result scanning generates the detector signal it then enforces on. Phase B injects the detector through the plugin contract instead of importing it.",
   ],
 ]);
 

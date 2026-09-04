@@ -140,8 +140,8 @@ export { inputBlocklist, inputLength, inputPattern, networkAllowlist, scopeBound
 export { mlInjectionGuard } from "./policy-presets.js";
 export { runWithOutcome } from "./action-recorder.js";
 export type { RunWithOutcomeOptions } from "./action-recorder.js";
-export { scanToolResult, extractScannableText } from "./tool-result-scan.js";
-export type { ScanToolResultInput, ScanToolResultOutput, BlockedToolResult } from "./tool-result-scan.js";
+export { scanToolResult, extractScannableText } from "./plugins/tool-result-scan.js";
+export type { ScanToolResultInput, ScanToolResultOutput, BlockedToolResult } from "./plugins/tool-result-scan.js";
 export { SENSITIVE_PATTERNS, getSensitivePatterns } from "./conditions/sensitive-patterns.js";
 export type { SensitivePattern } from "./conditions/sensitive-patterns.js";
 export { maskSensitiveData, maskPattern, maskBlocklistTerms } from "./mask.js";

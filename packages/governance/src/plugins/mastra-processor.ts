@@ -47,7 +47,7 @@ import type {
   ProcessorStats,
 } from "./mastra-processor-types.js";
 import { governStreamChunk } from "./mastra-processor-stream.js";
-import { scanToolResult } from "../tool-result-scan.js";
+import { scanToolResult } from "./tool-result-scan.js";
 import { appendTaint, type TaintMark } from "../taint.js";
 import { createAdapterCore, type AdapterCore } from "./adapter-core.js";
 
