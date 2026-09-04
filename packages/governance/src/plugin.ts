@@ -67,6 +67,13 @@ export type AuditSink = (event: AuditEvent) => void | Promise<void>;
 /** A named report over governance state — standards mappings register these. */
 export type Reporter<Config = unknown, Report = unknown> = (config: Config) => Promise<Report> | Report;
 
+/**
+ * Undo one registration. Every register verb returns one, and the registry
+ * records them per plugin so `gov.unuse(id)` rolls the plugin back in full
+ * without the plugin author having to track anything.
+ */
+export type Disposer = () => void;
+
 /** Verifier kinds the kernel knows how to consult. */
 export type VerifierKind = "identity" | "remote-decision";
 
@@ -90,20 +97,28 @@ export interface KernelFailModes {
 export interface KernelHandle {
   /** Version of the kernel doing the installing, for a plugin's own checks. */
   readonly core: string;
-  /** Register a condition type. Validated like a built-in from this moment on. */
-  registerCondition(entry: RegisteredConditionType, opts?: { override?: boolean }): void;
+  /**
+   * Register a condition type. Validated like a built-in from this moment on.
+   * The disposer restores whatever the registration displaced, so overriding
+   * a built-in is reversible.
+   */
+  registerCondition(entry: RegisteredConditionType, opts?: { override?: boolean }): Disposer;
   /** Teach the engine how to redact for a condition type it can now match. */
-  registerMaskStrategy(conditionType: string, mask: MaskStrategy): void;
+  registerMaskStrategy(conditionType: string, mask: MaskStrategy): Disposer;
   /** Register a verifier the kernel consults (identity, remote decisions). */
-  registerVerifier(kind: VerifierKind, verifier: unknown): void;
-  /** Register a named report over governance state (EU AI Act, OWASP, …). */
-  registerReporter(id: string, reporter: Reporter): void;
+  registerVerifier(kind: VerifierKind, verifier: unknown): Disposer;
+  /**
+   * Register a named report over governance state (EU AI Act, OWASP, …).
+   * `Config` and `Report` flow through to `gov.report()` for callers who name
+   * them, so a typed mapping does not have to narrow at the boundary.
+   */
+  registerReporter<Config = unknown, Report = unknown>(id: string, reporter: Reporter<Config, Report>): Disposer;
   /** Subscribe to enforcement, registration, policy and kill/revive events. */
   readonly events: GovernanceEmitter;
   /** Write an audit event through the instance (chained when integrity is on). */
   readonly audit: { log(event: Omit<AuditEvent, "id" | "createdAt">): Promise<AuditEvent> };
   /** Receive every audit event after it is written. */
-  addSink(sink: AuditSink): void;
+  addSink(sink: AuditSink): Disposer;
   /** How this instance behaves under failure. */
   failModes(): KernelFailModes;
 }
@@ -231,7 +246,7 @@ export function createPluginRegistry(
   coreVersion: string,
   capabilities: readonly KernelCapability[] = KERNEL_CAPABILITIES,
 ): PluginRegistry {
-  const installed = new Map<string, { plugin: GovernancePlugin; record: InstalledPlugin }>();
+  const installed = new Map<string, { plugin: GovernancePlugin; record: InstalledPlugin; disposers: Disposer[] }>();
 
   return {
     async use(plugin: GovernancePlugin): Promise<void> {
@@ -273,9 +288,32 @@ export function createPluginRegistry(
         }
       }
 
-      await plugin.install(handle);
+      // Every registration this plugin makes is recorded, so `unuse()` can
+      // undo it without the plugin tracking its own teardown. A plugin's own
+      // `uninstall()` is then only for resources the kernel never saw —
+      // timers, connections, file handles.
+      const disposers: Disposer[] = [];
+      const record = <T extends unknown[]>(fn: (...args: T) => Disposer) => (...args: T): Disposer => {
+        const dispose = fn(...args);
+        disposers.push(dispose);
+        return dispose;
+      };
+      const scoped: KernelHandle = {
+        core: handle.core,
+        registerCondition: record(handle.registerCondition.bind(handle)),
+        registerMaskStrategy: record(handle.registerMaskStrategy.bind(handle)),
+        registerVerifier: record(handle.registerVerifier.bind(handle)),
+        registerReporter: record(handle.registerReporter.bind(handle)) as KernelHandle["registerReporter"],
+        addSink: record(handle.addSink.bind(handle)),
+        events: handle.events,
+        audit: handle.audit,
+        failModes: handle.failModes,
+      };
+
+      await plugin.install(scoped);
       installed.set(plugin.id, {
         plugin,
+        disposers,
         record: { id: plugin.id, version: plugin.version, installedAt: new Date().toISOString() },
       });
     },
@@ -284,6 +322,8 @@ export function createPluginRegistry(
       const entry = installed.get(id);
       if (!entry) return false;
       await entry.plugin.uninstall?.();
+      // Reverse order: a later registration may have displaced an earlier one.
+      for (let i = entry.disposers.length - 1; i >= 0; i--) entry.disposers[i]();
       installed.delete(id);
       return true;
     },

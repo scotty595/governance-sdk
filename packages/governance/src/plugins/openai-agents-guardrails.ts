@@ -49,6 +49,7 @@ import {
   GovernanceApprovalRequiredError,
 } from "./outcome-handler.js";
 import { enforcePreprocess, enforcePostprocess } from "./pre-post-enforce.js";
+import { contentToText as flattenContent, extractLastText } from "./text-extract.js";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -222,20 +223,34 @@ export function createOutputGuardrail(
 }
 
 // ─── Helpers ────────────────────────────────────────────────────
+// Content flattening lives in text-extract.ts; the Agents SDK's own
+// `input_text` / `output_text` part types are normalised onto the shared
+// `type: "text"` shape first.
+
+function normalisePart(part: unknown): unknown {
+  if (!part || typeof part !== "object") return part;
+  const p = part as { type?: unknown };
+  return p.type === "input_text" || p.type === "output_text"
+    ? { ...(part as object), type: "text" }
+    : part;
+}
+
+function contentToText(content: unknown): string {
+  return flattenContent(Array.isArray(content) ? content.map(normalisePart) : content);
+}
 
 function inputToText(input: unknown): string {
   if (typeof input === "string") return input;
-  if (Array.isArray(input)) {
-    // Array of input items (Agents SDK message-style input)
-    for (let i = input.length - 1; i >= 0; i--) {
-      const item = input[i];
-      if (!item || typeof item !== "object") continue;
-      const obj = item as { role?: string; content?: unknown };
-      if (obj.role !== "user") continue;
-      return contentToText(obj.content);
-    }
-  }
-  return "";
+  if (!Array.isArray(input)) return "";
+  // Array of input items (Agents SDK message-style input).
+  const messages = input
+    .filter((item): item is { role?: string; content?: unknown } =>
+      Boolean(item) && typeof item === "object")
+    .map((item) => ({
+      role: item.role ?? "",
+      content: Array.isArray(item.content) ? item.content.map(normalisePart) : item.content,
+    }));
+  return extractLastText(messages);
 }
 
 function outputToText(output: unknown): string {
@@ -244,26 +259,6 @@ function outputToText(output: unknown): string {
     const obj = output as { content?: unknown; text?: unknown };
     if (typeof obj.text === "string") return obj.text;
     return contentToText(obj.content);
-  }
-  return "";
-}
-
-function contentToText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") return part;
-        if (part && typeof part === "object" && "type" in part) {
-          const p = part as { type: string; text?: string };
-          if (p.type === "text" || p.type === "input_text" || p.type === "output_text") {
-            return p.text ?? "";
-          }
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
   }
   return "";
 }

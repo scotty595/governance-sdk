@@ -209,6 +209,18 @@
     "./plugin": {
       "types": "./dist/plugin.d.ts",
       "import": "./dist/plugin.js"
+    },
+    "./ext/standards": {
+      "types": "./dist/ext/standards-plugin.d.ts",
+      "import": "./dist/ext/standards-plugin.js"
+    },
+    "./ext/scoring": {
+      "types": "./dist/ext/scoring-plugin.d.ts",
+      "import": "./dist/ext/scoring-plugin.js"
+    },
+    "./ext/detect": {
+      "types": "./dist/ext/detect-plugin.d.ts",
+      "import": "./dist/ext/detect-plugin.js"
     }
   },
   "files": [

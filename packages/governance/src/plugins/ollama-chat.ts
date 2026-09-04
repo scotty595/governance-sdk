@@ -33,6 +33,7 @@ import type { OutcomeCallbacks } from "./outcome-handler.js";
 import { enforcePreprocess, enforcePostprocess } from "./pre-post-enforce.js";
 import { enforcePostprocessStream } from "./pre-post-stream.js";
 import type { StreamMode } from "./pre-post-stream.js";
+import { extractLastText, replaceLastText } from "./text-extract.js";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -97,7 +98,7 @@ export function createGovernedOllamaChat(
     let workingParams = params;
 
     if (runPre) {
-      const text = extractLastUserText(params.messages);
+      const text = extractLastText(params.messages);
       if (text) {
         const pre = await enforcePreprocess(governance, text, {
           agentId: config.agentId,
@@ -111,7 +112,7 @@ export function createGovernedOllamaChat(
         if (pre.text !== text) {
           workingParams = {
             ...params,
-            messages: replaceLastUserText(params.messages, pre.text),
+            messages: replaceLastText(params.messages, pre.text),
           };
         }
       }
@@ -164,7 +165,7 @@ async function* wrapGovernedOllamaStream(
 
   let workingParams = params;
   if (runPre) {
-    const text = extractLastUserText(params.messages);
+    const text = extractLastText(params.messages);
     if (text) {
       const pre = await enforcePreprocess(governance, text, {
         agentId: config.agentId,
@@ -178,7 +179,7 @@ async function* wrapGovernedOllamaStream(
       if (pre.text !== text) {
         workingParams = {
           ...params,
-          messages: replaceLastUserText(params.messages, pre.text),
+          messages: replaceLastText(params.messages, pre.text),
         };
       }
     }
@@ -209,27 +210,4 @@ async function* wrapGovernedOllamaStream(
   });
 }
 
-// ─── Helpers ────────────────────────────────────────────────────
-
-function extractLastUserText(messages: OllamaChatParams["messages"]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role !== "user") continue;
-    const content = messages[i].content;
-    if (typeof content === "string") return content;
-    return "";
-  }
-  return "";
-}
-
-function replaceLastUserText(
-  messages: OllamaChatParams["messages"],
-  newText: string,
-): OllamaChatParams["messages"] {
-  const next = messages.map((m) => ({ ...m }));
-  for (let i = next.length - 1; i >= 0; i--) {
-    if (next[i].role !== "user") continue;
-    next[i].content = newText;
-    break;
-  }
-  return next;
-}
+// Message extraction and shape-preserving replacement: text-extract.ts.

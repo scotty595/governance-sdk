@@ -340,7 +340,7 @@ export interface GovernanceInstance {
    * `standards/owasp-asi`, …). Throws when no reporter is registered under
    * that id, naming the ids that are.
    */
-  report?: <Report = unknown>(id: string, config?: unknown) => Promise<Report>;
+  report?: <Report = unknown, Config = unknown>(id: string, config?: Config) => Promise<Report>;
   /** Verifiers plugins registered, consulted by the kernel where it has a hook. */
   getVerifier?: (kind: VerifierKind) => unknown;
 }
@@ -745,21 +745,35 @@ export function createGovernance(config: GovernanceConfig = {}): GovernanceInsta
     registerCondition: (entry, opts) => policies.registerCondition(entry, opts),
     registerMaskStrategy: (conditionType: string, mask: MaskStrategy) =>
       policies.registerMaskStrategy(conditionType, mask),
-    registerVerifier: (kind, verifier) => { verifiers.set(kind, verifier); },
+    registerVerifier: (kind, verifier) => {
+      const previous = verifiers.get(kind);
+      verifiers.set(kind, verifier);
+      return () => {
+        if (previous !== undefined) verifiers.set(kind, previous);
+        else verifiers.delete(kind);
+      };
+    },
     registerReporter: (id, reporter) => {
       if (reporters.has(id)) {
         throw new Error(`Reporter "${id}" is already registered on this instance`);
       }
-      reporters.set(id, reporter);
+      reporters.set(id, reporter as Reporter);
+      return () => { reporters.delete(id); };
     },
     events,
     audit: { log: (event) => writeAudit(event) },
-    addSink: (sink) => { sinks.push(sink); },
+    addSink: (sink) => {
+      sinks.push(sink);
+      return () => {
+        const i = sinks.indexOf(sink);
+        if (i >= 0) sinks.splice(i, 1);
+      };
+    },
     failModes,
   };
   const pluginRegistry = createPluginRegistry(kernelHandle, CORE_VERSION);
 
-  async function report<Report = unknown>(id: string, reportConfig?: unknown): Promise<Report> {
+  async function report<Report = unknown, Config = unknown>(id: string, reportConfig?: Config): Promise<Report> {
     const reporter = reporters.get(id);
     if (!reporter) {
       const known = [...reporters.keys()].sort();
@@ -818,10 +832,31 @@ export type { AuditChain, AuditChainDeps, ResolvedIntegrityConfig } from "./audi
 export { createScoringHooks } from "./scoring-hooks.js";
 export type { ScoringHooks } from "./scoring-hooks.js";
 export { createSessionLedger } from "./session-ledger.js";
+
+// ─── Plugins (ext) ──────────────────────────────────────────────
+// Standards, scoring and detection reached through gov.use(). Additive: the
+// direct exports (mapToEuAiAct, assessAgent, detectInjection) are unchanged.
+export {
+  euAiActPlugin,
+  owaspAgenticPlugin,
+  nistAiRmfPlugin,
+  iso42001Plugin,
+  allStandardsPlugins,
+} from "./ext/standards-plugin.js";
+export { scoringPlugin } from "./ext/scoring-plugin.js";
+export type {
+  AgentScoreConfig,
+  FleetScoreConfig,
+  BehavioralScoreConfig,
+  ScoringPluginOptions,
+} from "./ext/scoring-plugin.js";
+export { detectPlugin } from "./ext/detect-plugin.js";
+export type { DetectPluginOptions, BenchmarkReportConfig } from "./ext/detect-plugin.js";
 export { createPluginRegistry, satisfiesRange, PluginError } from "./plugin.js";
 export type {
   GovernancePlugin,
   KernelHandle,
+  Disposer,
   KernelCapability,
   InstalledPlugin,
   MaskStrategy,

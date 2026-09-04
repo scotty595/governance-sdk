@@ -249,6 +249,21 @@ export function createIntegrityAudit(
 
     for (let i = 0; i < sorted.length; i++) {
       const event = sorted[i];
+
+      // `events` comes back from a storage adapter, which may be supplied by
+      // the caller. A hole in that array is not an invariant we can assume —
+      // treat it as a break, the same as an event with no integrity record.
+      if (!event) {
+        return {
+          valid: false,
+          eventsVerified: i,
+          totalEvents: sorted.length,
+          brokenAt: i,
+          breakDetail: `Event at position ${i} is missing from the audit query result — possible deletion`,
+          verifiedAt: new Date().toISOString(),
+        };
+      }
+
       const integrity = integrityMap.get(event.id);
 
       if (!integrity) {

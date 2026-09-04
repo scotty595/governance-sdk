@@ -19,6 +19,7 @@ import type { OutcomeCallbacks } from "./outcome-handler.js";
 import { enforcePreprocess, enforcePostprocess } from "./pre-post-enforce.js";
 import { enforcePostprocessStream } from "./pre-post-stream.js";
 import type { StreamMode } from "./pre-post-stream.js";
+import { contentToText, extractLastText, replaceLastText } from "./text-extract.js";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -94,7 +95,7 @@ export function createGovernedChat(
       let workingParams = params;
 
       if (runPre) {
-        const text = extractLastUserText(params.messages);
+        const text = extractLastText(params.messages);
         if (text) {
           const pre = await enforcePreprocess(governance, text, {
             agentId: config.agentId,
@@ -108,7 +109,7 @@ export function createGovernedChat(
           if (pre.text !== text) {
             workingParams = {
               ...params,
-              messages: replaceLastUserText(params.messages, pre.text),
+              messages: replaceLastText(params.messages, pre.text),
             };
           }
         }
@@ -159,7 +160,7 @@ async function* wrapGovernedMistralStream(
 
   let workingParams = params;
   if (runPre) {
-    const text = extractLastUserText(params.messages);
+    const text = extractLastText(params.messages);
     if (text) {
       const pre = await enforcePreprocess(governance, text, {
         agentId: config.agentId,
@@ -173,7 +174,7 @@ async function* wrapGovernedMistralStream(
       if (pre.text !== text) {
         workingParams = {
           ...params,
-          messages: replaceLastUserText(params.messages, pre.text),
+          messages: replaceLastText(params.messages, pre.text),
         };
       }
     }
@@ -213,73 +214,11 @@ async function* wrapGovernedMistralStream(
 }
 
 // ─── Helpers ────────────────────────────────────────────────────
-
-function extractLastUserText(messages: MistralChatParams["messages"]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role !== "user") continue;
-    return contentToText(messages[i].content);
-  }
-  return "";
-}
-
-function contentToText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") return part;
-        if (part && typeof part === "object" && "type" in part) {
-          const p = part as { type: string; text?: string };
-          if (p.type === "text") return p.text ?? "";
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-  return "";
-}
-
-function replaceLastUserText(
-  messages: MistralChatParams["messages"],
-  newText: string,
-): MistralChatParams["messages"] {
-  const next = messages.map((m) => ({ ...m }));
-  for (let i = next.length - 1; i >= 0; i--) {
-    if (next[i].role !== "user") continue;
-    const msg = next[i];
-    if (typeof msg.content === "string") {
-      msg.content = newText;
-    } else if (Array.isArray(msg.content)) {
-      msg.content = (msg.content as unknown[]).map((p) => {
-        if (p && typeof p === "object" && "type" in p && (p as { type: string }).type === "text") {
-          return { ...(p as object), text: newText };
-        }
-        return p;
-      });
-    }
-    break;
-  }
-  return next;
-}
+// Request-message extraction and shape-preserving replacement live in
+// text-extract.ts; only the Mistral response envelope is handled here.
 
 function extractResponseText(response: MistralChatResponse): string {
-  const content = response.choices?.[0]?.message?.content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((p) => {
-        if (typeof p === "string") return p;
-        if (p && typeof p === "object" && "type" in p) {
-          const part = p as { type: string; text?: string };
-          if (part.type === "text") return part.text ?? "";
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-  return "";
+  return contentToText(response.choices?.[0]?.message?.content);
 }
 
 function replaceResponseText(
@@ -289,19 +228,9 @@ function replaceResponseText(
   const choices = (response.choices ?? []).map((c, i) => {
     if (i !== 0) return c;
     const msg = c.message ?? {};
-    if (typeof msg.content === "string" || msg.content == null) {
-      return { ...c, message: { ...msg, content: newText } };
-    }
-    if (Array.isArray(msg.content)) {
-      const parts = (msg.content as unknown[]).map((p) => {
-        if (p && typeof p === "object" && "type" in p && (p as { type: string }).type === "text") {
-          return { ...(p as object), text: newText };
-        }
-        return p;
-      });
-      return { ...c, message: { ...msg, content: parts } };
-    }
-    return { ...c, message: { ...msg, content: newText } };
+    if (msg.content == null) return { ...c, message: { ...msg, content: newText } };
+    const [replaced] = replaceLastText([{ role: "assistant", content: msg.content }], newText, "assistant");
+    return { ...c, message: { ...msg, content: replaced.content } };
   });
   return { ...response, choices };
 }

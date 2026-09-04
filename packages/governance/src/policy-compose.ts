@@ -60,6 +60,20 @@ export interface PolicyConflict {
   winner: string;
 }
 
+/** One rule after priority boosting, tagged with where it came from. */
+interface ComposedRule {
+  rule: PolicyRule;
+  source: string;
+  setIndex: number;
+}
+
+/**
+ * A group of rules sharing one condition key. Groups are only ever created
+ * with their first member (see phase 2), so the first element always exists —
+ * the tuple type is what lets the compiler see that.
+ */
+type ComposedRuleGroup = [ComposedRule, ...ComposedRule[]];
+
 // ─── Compose Engine ─────────────────────────────────────────────
 
 /**
@@ -93,10 +107,9 @@ export function composePolicies(
   let deduplicatedCount = 0;
 
   // Phase 1: Collect all rules with priority boosts
-  const allRules: { rule: PolicyRule; source: string; setIndex: number }[] = [];
+  const allRules: ComposedRule[] = [];
 
-  for (let i = 0; i < sets.length; i++) {
-    const set = sets[i];
+  for (const [i, set] of sets.entries()) {
     const boost = set.priorityBoost ?? 0;
 
     for (const rule of set.rules) {
@@ -114,7 +127,7 @@ export function composePolicies(
   }
 
   // Phase 2: Detect and resolve conflicts
-  const rulesByConditionType = new Map<string, typeof allRules>();
+  const rulesByConditionType = new Map<string, ComposedRuleGroup>();
 
   for (const entry of allRules) {
     const key = conditionKey(entry.rule);
@@ -129,14 +142,15 @@ export function composePolicies(
   const resolvedRules: PolicyRule[] = [];
 
   for (const entries of rulesByConditionType.values()) {
+    const [firstEntry] = entries;
     if (entries.length === 1) {
-      resolvedRules.push(entries[0].rule);
+      resolvedRules.push(firstEntry.rule);
       continue;
     }
 
     // Conflict detected
     const hasConflict = !entries.every(
-      (e) => e.rule.outcome === entries[0].rule.outcome,
+      (e) => e.rule.outcome === firstEntry.rule.outcome,
     );
 
     if (hasConflict) {
@@ -150,11 +164,13 @@ export function composePolicies(
       resolvedRules.push(winner.rule);
       deduplicatedCount += entries.length - 1;
     } else if (deduplicate) {
-      // Same outcome — keep highest priority
-      const sorted = [...entries].sort(
-        (a, b) => b.rule.priority - a.rule.priority,
+      // Same outcome — keep highest priority. `reduce` over a non-empty
+      // group needs no seed and, like the stable sort it replaces, keeps the
+      // first-collected entry when priorities tie.
+      const winner = entries.reduce((highest, e) =>
+        e.rule.priority > highest.rule.priority ? e : highest,
       );
-      resolvedRules.push(sorted[0].rule);
+      resolvedRules.push(winner.rule);
       deduplicatedCount += entries.length - 1;
     } else {
       for (const entry of entries) {
@@ -210,9 +226,9 @@ function conditionKey(rule: PolicyRule): string {
 }
 
 function resolveConflict(
-  entries: { rule: PolicyRule; source: string; setIndex: number }[],
+  entries: ComposedRuleGroup,
   strategy: ConflictStrategy,
-): { rule: PolicyRule; source: string; setIndex: number } {
+): ComposedRule {
   switch (strategy) {
     case "strict":
       // Block wins

@@ -12,8 +12,14 @@ import { evaluateBlocklist, evaluateInputLength, evaluateInputPattern } from "./
 import { evaluateNetworkAllowlist, evaluateScopeBoundary, evaluateCostBudget, evaluateConcurrentLimit } from "./process.js";
 import { evaluateOutputLength, evaluateOutputPattern, evaluateSensitiveDataFilter } from "./postprocess.js";
 
-/** Extract all string values from a nested object for scanning */
-function extractStrings(obj: Record<string, unknown>): string[] {
+/**
+ * Extract all string values from a nested object for scanning.
+ *
+ * Exported because any plugin overriding a content-scanning condition needs
+ * the identical walk — re-implementing it is how the built-in and the
+ * replacement drift apart on which fields they actually look at.
+ */
+export function extractStrings(obj: Record<string, unknown>): string[] {
   const out: string[] = [];
   (function walk(v: unknown) {
     if (typeof v === "string") out.push(v);

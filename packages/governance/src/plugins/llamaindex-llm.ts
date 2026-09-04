@@ -18,6 +18,12 @@ import type { OutcomeCallbacks } from "./outcome-handler.js";
 import { enforcePreprocess, enforcePostprocess } from "./pre-post-enforce.js";
 import { enforcePostprocessStream } from "./pre-post-stream.js";
 import type { StreamMode } from "./pre-post-stream.js";
+import {
+  contentToText,
+  extractLastText,
+  replaceLastText,
+  type TextMessage,
+} from "./text-extract.js";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -122,7 +128,7 @@ async function wrapChat(
   let working = request;
 
   if (runPre) {
-    const text = extractLastUserText(request.messages);
+    const text = extractLastText(toTextMessages(request.messages));
     if (text) {
       const pre = await enforcePreprocess(governance, text, {
         agentId: config.agentId,
@@ -134,7 +140,7 @@ async function wrapChat(
         toolName: "llamaindex.chat:pre",
       });
       if (pre.text !== text) {
-        working = { ...request, messages: replaceLastUserText(request.messages, pre.text) };
+        working = { ...request, messages: replaceLastText(request.messages, pre.text) };
       }
     }
   }
@@ -176,7 +182,7 @@ async function* wrapStreamChat(
   let working = request;
 
   if (runPre) {
-    const text = extractLastUserText(request.messages);
+    const text = extractLastText(toTextMessages(request.messages));
     if (text) {
       const pre = await enforcePreprocess(governance, text, {
         agentId: config.agentId,
@@ -188,7 +194,7 @@ async function* wrapStreamChat(
         toolName: "llamaindex.chat.stream:pre",
       });
       if (pre.text !== text) {
-        working = { ...request, messages: replaceLastUserText(request.messages, pre.text) };
+        working = { ...request, messages: replaceLastText(request.messages, pre.text) };
       }
     }
   }
@@ -216,42 +222,25 @@ async function* wrapStreamChat(
 }
 
 // ─── Helpers ───────────────────────────────────────────────────
+// Message extraction and shape-preserving replacement live in
+// text-extract.ts. LlamaIndex content parts carry `{ text }` with no `type`
+// discriminator, so tag them before handing the value to the shared
+// extractor, which keys off `type: "text"` — the shape every other
+// framework uses.
 
-function extractLastUserText(messages: LlamaChatMessage[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role !== "user") continue;
-    return messageContentToText(messages[i].content);
-  }
-  return "";
+function asTextParts(content: unknown): unknown {
+  if (!Array.isArray(content)) return content;
+  return content.map((p) =>
+    p && typeof p === "object" && typeof (p as { text?: unknown }).text === "string"
+      ? { type: "text", ...(p as object) }
+      : p,
+  );
+}
+
+function toTextMessages(messages: LlamaChatMessage[]): TextMessage[] {
+  return messages.map((m) => ({ role: m.role, content: asTextParts(m.content) }));
 }
 
 function messageContentToText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((p) => {
-        if (typeof p === "string") return p;
-        if (p && typeof p === "object" && "text" in p) {
-          const t = (p as { text?: unknown }).text;
-          if (typeof t === "string") return t;
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-  return "";
-}
-
-function replaceLastUserText(
-  messages: LlamaChatMessage[],
-  newText: string,
-): LlamaChatMessage[] {
-  const next = messages.map((m) => ({ ...m }));
-  for (let i = next.length - 1; i >= 0; i--) {
-    if (next[i].role !== "user") continue;
-    next[i].content = newText;
-    break;
-  }
-  return next;
+  return contentToText(asTextParts(content));
 }

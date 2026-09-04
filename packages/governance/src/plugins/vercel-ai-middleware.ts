@@ -50,6 +50,7 @@ import type {
   VercelStreamResult,
 } from "./vercel-ai-stream.js";
 import type { StreamMode } from "./pre-post-stream.js";
+import { extractLastText, partsToText, replaceLastText } from "./text-extract.js";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -181,75 +182,24 @@ export type { VercelStreamPart, VercelStreamResult } from "./vercel-ai-stream.js
 export type { StreamMode } from "./pre-post-stream.js";
 
 // ─── Prompt helpers ─────────────────────────────────────────────
+// Message extraction and shape-preserving replacement live in
+// text-extract.ts; only the Vercel params/result envelopes are handled here.
 
 function extractLastUserText(params: VercelLanguageModelParams): string {
-  const prompt = params.prompt;
-  if (!Array.isArray(prompt)) return "";
-  for (let i = prompt.length - 1; i >= 0; i--) {
-    const msg = prompt[i];
-    if (msg.role !== "user") continue;
-    return contentToText(msg.content);
-  }
-  return "";
-}
-
-function contentToText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") return part;
-        if (part && typeof part === "object" && "type" in part) {
-          const p = part as { type: string; text?: string };
-          if (p.type === "text") return p.text ?? "";
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-  return "";
+  return Array.isArray(params.prompt) ? extractLastText(params.prompt) : "";
 }
 
 function replaceLastUserText(
   params: VercelLanguageModelParams,
   newText: string,
 ): VercelLanguageModelParams {
-  const prompt = params.prompt;
-  if (!Array.isArray(prompt)) return params;
-  const next = prompt.map((m) => ({ ...m }));
-  for (let i = next.length - 1; i >= 0; i--) {
-    if (next[i].role !== "user") continue;
-    const msg = next[i];
-    if (typeof msg.content === "string") {
-      msg.content = newText;
-    } else if (Array.isArray(msg.content)) {
-      const parts = (msg.content as unknown[]).map((p) => {
-        if (p && typeof p === "object" && "type" in p && (p as { type: string }).type === "text") {
-          return { ...(p as object), text: newText };
-        }
-        return p;
-      });
-      const hasText = parts.some(
-        (p) => p && typeof p === "object" && "type" in p && (p as { type: string }).type === "text",
-      );
-      if (!hasText) parts.push({ type: "text", text: newText });
-      msg.content = parts;
-    }
-    break;
-  }
-  return { ...params, prompt: next };
+  if (!Array.isArray(params.prompt)) return params;
+  return { ...params, prompt: replaceLastText(params.prompt, newText) };
 }
 
 function extractGenerateText(result: VercelGenerateResult): string {
   if (typeof result.text === "string" && result.text) return result.text;
-  if (Array.isArray(result.content)) {
-    return result.content
-      .filter((p) => p.type === "text" && typeof p.text === "string")
-      .map((p) => p.text as string)
-      .join("\n");
-  }
-  return "";
+  return Array.isArray(result.content) ? partsToText(result.content) : "";
 }
 
 function replaceGenerateText(
@@ -259,13 +209,12 @@ function replaceGenerateText(
   const next: VercelGenerateResult = { ...result };
   if (typeof result.text === "string") next.text = newText;
   if (Array.isArray(result.content)) {
-    const parts = result.content.map((p) =>
-      p.type === "text" ? { ...p, text: newText } : p,
+    const [replaced] = replaceLastText(
+      [{ role: "assistant", content: result.content }],
+      newText,
+      "assistant",
     );
-    if (!parts.some((p) => p.type === "text")) {
-      parts.push({ type: "text", text: newText });
-    }
-    next.content = parts;
+    next.content = replaced.content as VercelGenerateResult["content"];
   }
   return next;
 }

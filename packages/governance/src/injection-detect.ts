@@ -65,7 +65,18 @@ const DEFAULT_MAX_INPUT_LENGTH = 100_000;
 
 export interface InjectionDetectorConfig {
   threshold?: number;
+  /** Extra patterns, scanned alongside the built-in corpus. */
   customPatterns?: InjectionPattern[];
+  /**
+   * Use exactly these patterns instead of the built-in corpus.
+   *
+   * `customPatterns` adds to the 56 built-ins; this replaces them, which is
+   * what a caller swapping in their own detector actually needs. Without it
+   * the only removal lever was `skipCategories`, and since every category is
+   * populated by built-ins, skipping them all would drop the caller's patterns
+   * too. `customPatterns` still applies on top when both are given.
+   */
+  patterns?: InjectionPattern[];
   skipCategories?: InjectionCategory[];
   /** Maximum input length in characters. Inputs exceeding this are flagged as detected. Default: 100000 */
   maxInputLength?: number;
@@ -258,7 +269,7 @@ export function detectInjection(
   const skipCategories = new Set(config.skipCategories ?? []);
 
   const allPatterns = [
-    ...BUILTIN_PATTERNS,
+    ...(config.patterns ?? BUILTIN_PATTERNS),
     ...(config.customPatterns ?? []),
   ].filter((p) => !skipCategories.has(p.category));
 

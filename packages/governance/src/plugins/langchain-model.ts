@@ -36,6 +36,7 @@ import type {
   LangChainStreamConfig,
 } from "./langchain-stream.js";
 import type { StreamMode } from "./pre-post-stream.js";
+import { contentToText, replaceLastText } from "./text-extract.js";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -171,6 +172,11 @@ export type {
 export type { StreamMode } from "./pre-post-stream.js";
 
 // ─── Helpers ────────────────────────────────────────────────────
+// Content flattening and shape-preserving replacement live in
+// text-extract.ts. LangChain is the one framework that carries the message
+// role on `_getType()` rather than a `role` field, and its messages are class
+// instances whose prototype must survive the rewrite — so role selection and
+// cloning stay here and only the content transform is shared.
 
 function extractLastHumanText(input: LangChainMessage[] | string): string {
   if (typeof input === "string") return input;
@@ -188,22 +194,7 @@ function isHuman(msg: LangChainMessage): boolean {
 }
 
 function messageToText(msg: LangChainMessage): string {
-  const content = msg.content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") return part;
-        if (part && typeof part === "object" && "type" in part) {
-          const p = part as { type: string; text?: string };
-          if (p.type === "text") return p.text ?? "";
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-  return "";
+  return contentToText(msg.content);
 }
 
 function replaceLastHumanText(
@@ -237,25 +228,8 @@ function cloneMessage(msg: LangChainMessage): LangChainMessage {
   return copy;
 }
 
+/** Mutates in place so the prototype-preserving clone above is kept. */
 function setMessageText(msg: LangChainMessage, newText: string): void {
-  const content = msg.content;
-  if (typeof content === "string") {
-    msg.content = newText;
-    return;
-  }
-  if (Array.isArray(content)) {
-    const parts = (content as unknown[]).map((p) => {
-      if (p && typeof p === "object" && "type" in p && (p as { type: string }).type === "text") {
-        return { ...(p as object), text: newText };
-      }
-      return p;
-    });
-    const hasText = parts.some(
-      (p) => p && typeof p === "object" && "type" in p && (p as { type: string }).type === "text",
-    );
-    if (!hasText) parts.push({ type: "text", text: newText });
-    msg.content = parts;
-    return;
-  }
-  msg.content = newText;
+  const [replaced] = replaceLastText([{ role: "user", content: msg.content }], newText);
+  msg.content = replaced.content;
 }

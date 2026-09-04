@@ -30,6 +30,12 @@ import type { OutcomeCallbacks } from "./outcome-handler.js";
 import { enforcePreprocess, enforcePostprocess } from "./pre-post-enforce.js";
 import { enforcePostprocessStream } from "./pre-post-stream.js";
 import type { StreamMode } from "./pre-post-stream.js";
+import {
+  contentToText as flattenContent,
+  extractLastText,
+  replaceLastText,
+  type TextMessage,
+} from "./text-extract.js";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -200,39 +206,35 @@ export function createGovernedGenerateStream(
 
 // ─── Helpers ────────────────────────────────────────────────────
 
-function extractUserText(opts: GenkitGenerateOptions): string {
-  if (typeof opts.prompt === "string") return opts.prompt;
-  if (Array.isArray(opts.messages)) {
-    for (let i = opts.messages.length - 1; i >= 0; i--) {
-      const m = opts.messages[i];
-      if (m.role !== "user") continue;
-      return contentToText(m.content);
-    }
-  }
-  if (opts.prompt && typeof opts.prompt === "object") {
-    return contentToText(opts.prompt);
-  }
-  return "";
+/**
+ * Genkit content parts carry `{ text }` with no `type` discriminator, so tag
+ * them before handing the value to the shared extractor (which keys off
+ * `type: "text"`, the shape every other framework uses).
+ */
+function asTextParts(content: unknown): unknown {
+  if (!Array.isArray(content)) return content;
+  return content.map((p) =>
+    p && typeof p === "object" && typeof (p as { text?: unknown }).text === "string"
+      ? { type: "text", ...(p as object) }
+      : p,
+  );
 }
 
 function contentToText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((p) => {
-        if (typeof p === "string") return p;
-        if (p && typeof p === "object" && "text" in p) {
-          const t = (p as { text?: unknown }).text;
-          if (typeof t === "string") return t;
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
+  return flattenContent(asTextParts(content));
+}
+
+function toTextMessages(messages: Array<{ role: string; content: unknown }>): TextMessage[] {
+  return messages.map((m) => ({ role: m.role, content: asTextParts(m.content) }));
+}
+
+function extractUserText(opts: GenkitGenerateOptions): string {
+  if (typeof opts.prompt === "string") return opts.prompt;
+  if (Array.isArray(opts.messages) && opts.messages.some((m) => m.role === "user")) {
+    return extractLastText(toTextMessages(opts.messages));
   }
-  if (content && typeof content === "object" && "text" in content) {
-    const t = (content as { text?: unknown }).text;
-    if (typeof t === "string") return t;
+  if (opts.prompt && typeof opts.prompt === "object") {
+    return contentToText(opts.prompt);
   }
   return "";
 }
@@ -243,13 +245,7 @@ function replaceUserText(
 ): GenkitGenerateOptions {
   if (typeof opts.prompt === "string") return { ...opts, prompt: newText };
   if (Array.isArray(opts.messages)) {
-    const messages = opts.messages.map((m) => ({ ...m }));
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role !== "user") continue;
-      messages[i].content = newText;
-      break;
-    }
-    return { ...opts, messages };
+    return { ...opts, messages: replaceLastText(opts.messages, newText) };
   }
   return { ...opts, prompt: newText };
 }

@@ -28,17 +28,52 @@ import {
   type IntegrityAuditEvent,
 } from "./audit-integrity.js";
 
+/**
+ * Structural check on one caller-supplied chain entry.
+ *
+ * `entries` is whatever the caller loaded — an exported chain that may have
+ * been truncated, hand-edited, or round-tripped through JSON. A hole in a
+ * sparse array spreads to `undefined`, `JSON.parse` happily produces `null`,
+ * and a hand-edited entry can be missing `createdAt` entirely. Any of those
+ * would throw inside the sort comparator below, turning a damaged chain into
+ * a crash instead of a verification failure.
+ */
+function isChainEntry(value: unknown): value is IntegrityAuditEvent {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "createdAt" in value &&
+    typeof value.createdAt === "string"
+  );
+}
+
 export async function verifyAuditIntegrity(
   entries: IntegrityAuditEvent[],
   signingKey: string,
 ): Promise<ChainVerificationResult> {
+  // Reject a damaged array before sorting it. An empty chain is legal (it
+  // verifies trivially); a chain with a hole in it is not.
+  const supplied: readonly unknown[] = entries;
+  const dense: IntegrityAuditEvent[] = [];
+  for (let i = 0; i < supplied.length; i++) {
+    const entry = supplied[i];
+    if (!isChainEntry(entry)) {
+      return broken(
+        i,
+        supplied.length,
+        `Entry at position ${i} is missing or is not an audit event — chain is damaged (deletion or truncation)`,
+      );
+    }
+    dense.push(entry);
+  }
+
   // Order by sequence, not createdAt: the sequence is allocated under the
   // chain's write lock and is HMAC-covered, so it IS the chain order. Wall
   // clocks are stamped before the lock and can disagree with it (lock-wait
   // inversion under concurrent writers, cross-process clock skew) — sorting
   // by createdAt would report a valid chain as tampered. A forged sequence
   // still fails the hash/previousHash checks below.
-  const sorted = [...entries].sort((a, b) => {
+  const sorted = dense.sort((a, b) => {
     const sa = a.integrity?.sequence;
     const sb = b.integrity?.sequence;
     if (sa != null && sb != null && sa !== sb) return sa - sb;
@@ -48,8 +83,9 @@ export async function verifyAuditIntegrity(
   let currentPreviousHash = GENESIS_HASH;
   let seq = 0;
 
-  for (let i = 0; i < sorted.length; i++) {
-    const event = sorted[i];
+  // `sorted` is dense by construction (built by push above), so `entries()`
+  // hands us a real event on every iteration.
+  for (const [i, event] of sorted.entries()) {
     if (!event.integrity || typeof event.integrity.hash !== "string") {
       return broken(i, sorted.length, `Event ${event.id} missing integrity metadata`);
     }

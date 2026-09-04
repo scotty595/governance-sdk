@@ -353,13 +353,13 @@ export interface PolicyEngine {
    * are registered at construction; plugins add their own through
    * `KernelHandle.registerMaskStrategy`.
    */
-  registerMaskStrategy: (conditionType: string, mask: MaskStrategy) => void;
+  registerMaskStrategy: (conditionType: string, mask: MaskStrategy) => () => void;
   /** Whether a mask strategy is registered for `conditionType`. */
   hasMaskStrategy: (conditionType: string) => boolean;
   getRules: (stage?: PolicyStage) => PolicyRule[];
   ruleCount: number;
   /** Register a custom condition type on this engine instance */
-  registerCondition: (entry: RegisteredConditionType, opts?: { override?: boolean }) => void;
+  registerCondition: (entry: RegisteredConditionType, opts?: { override?: boolean }) => () => void;
   /** Unregister a condition type by name */
   unregisterCondition: (name: string) => boolean;
   /** Get a registered condition type by name */
@@ -638,11 +638,18 @@ export function createPolicyEngine(config: PolicyEngineConfig = {}): PolicyEngin
     return [...rules];
   }
 
-  function registerCondition(entry: RegisteredConditionType, opts?: { override?: boolean }): void {
-    if (registry.has(entry.name) && !opts?.override) {
+  function registerCondition(entry: RegisteredConditionType, opts?: { override?: boolean }): () => void {
+    const previous = registry.get(entry.name);
+    if (previous && !opts?.override) {
       throw new Error(`Condition type "${entry.name}" is already registered. Use { override: true } to replace.`);
     }
     registry.set(entry.name, entry);
+    // Restoring the displaced entry is what lets a plugin that overrode a
+    // built-in be uninstalled without leaving the engine missing a condition.
+    return () => {
+      if (previous) registry.set(entry.name, previous);
+      else registry.delete(entry.name);
+    };
   }
 
   function unregisterCondition(name: string): boolean {
@@ -676,7 +683,16 @@ export function createPolicyEngine(config: PolicyEngineConfig = {}): PolicyEngin
     removeSystemRule,
     isSystemRule: (id) => systemIds.has(id),
     validateRule: (rule) => validateRule(rule, isRegistered),
-    registerMaskStrategy: (conditionType, mask) => { maskStrategies.set(conditionType, mask); },
+    registerMaskStrategy: (conditionType, mask) => {
+      // Returns a disposer that restores whatever was there before, so a
+      // plugin's registration can be rolled back exactly.
+      const previous = maskStrategies.get(conditionType);
+      maskStrategies.set(conditionType, mask);
+      return () => {
+        if (previous) maskStrategies.set(conditionType, previous);
+        else maskStrategies.delete(conditionType);
+      };
+    },
     hasMaskStrategy: (conditionType) => maskStrategies.has(conditionType),
     getRules,
     get ruleCount() { return rules.filter((r) => r.enabled).length; },
@@ -690,6 +706,9 @@ export function createPolicyEngine(config: PolicyEngineConfig = {}): PolicyEngin
 
 // ─── Re-exports ─────────────────────────────────────────────────
 
+// The input walk a content-scanning condition uses, re-exported next to
+// getScanText so a plugin reaches both from the same place.
+export { extractStrings } from "./conditions/builtins.js";
 export { PolicyValidationError, validateRuleShape, POLICY_OUTCOMES, POLICY_STAGES } from "./policy-validate.js";
 export type { PolicyValidationIssue } from "./policy-validate.js";
 export type { TaintMark, TaintSource, TaintFilter } from "./taint.js";
