@@ -20,9 +20,7 @@
  * ```
  */
 
-import type { GovernanceInstance, AuditEvent } from "../index";
-import type { EnforcementDecision, PolicyAction } from "../policy";
-import type { AgentRegistration } from "../types";
+import type { GovernanceInstance } from "../index";
 import type {
   AnthropicToolExecutor, AnthropicToolUseBlock, AnthropicToolResultBlock,
   GovernAnthropicConfig, GovernedAnthropicResult,
@@ -36,8 +34,8 @@ export type {
   GovernAnthropicConfig, GovernedAnthropicResult,
 } from "./anthropic-types.js";
 
-import { handleOutcome, GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outcome-handler.js";
-import type { OutcomeCallbacks } from "./outcome-handler.js";
+import { GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outcome-handler.js";
+import { createAdapterCore } from "./adapter-core.js";
 
 // ─── Blocked Error ──────────────────────────────────────────
 
@@ -62,49 +60,6 @@ export type {
 } from "./anthropic-stream.js";
 export { createGovernedMessageStream } from "./anthropic-stream.js";
 
-// ─── Shared Helpers ─────────────────────────────────────────
-
-function buildRegistration(config: GovernAnthropicConfig, toolNames: string[]): AgentRegistration {
-  return {
-    id: config.agentId,
-    name: config.agentName,
-    framework: config.framework ?? "anthropic",
-    owner: config.owner,
-    description: config.description,
-    version: config.version,
-    channels: config.channels,
-    tools: toolNames,
-    hasAuth: config.hasAuth,
-    hasGuardrails: config.hasGuardrails,
-    hasObservability: config.hasObservability,
-    hasAuditLog: true,
-    permissions: config.permissions,
-    metadata: config.metadata,
-  };
-}
-
-function createEnforcer(governance: GovernanceInstance, agentId: string, agentLevel: number, config: GovernAnthropicConfig) {
-  return async (toolName: string, input?: Record<string, unknown>): Promise<EnforcementDecision> => {
-    const action = config.actionMapper?.(toolName) ?? ("tool_call" as PolicyAction);
-    const decision = await governance.enforce({
-      agentId, agentName: config.agentName, agentLevel,
-      action, tool: toolName, input,
-      sessionTokensUsed: config.sessionTokenTracker?.(),
-    });
-    handleOutcome(decision, toolName, config as OutcomeCallbacks);
-    return decision;
-  };
-}
-
-function createAuditor(governance: GovernanceInstance, agentId: string) {
-  return (toolName: string, outcome: "success" | "failure", detail?: Record<string, unknown>): Promise<AuditEvent> =>
-    governance.audit.log({
-      agentId, eventType: "tool_call", outcome,
-      severity: outcome === "failure" ? "warning" : "info",
-      detail: { tool: toolName, ...detail },
-    });
-}
-
 // ─── Main Export ────────────────────────────────────────────
 
 export async function governAnthropicTools(
@@ -113,27 +68,15 @@ export async function governAnthropicTools(
   config: GovernAnthropicConfig,
 ): Promise<GovernedAnthropicResult> {
   const toolNames = tools.map((t) => t.name);
-  const reg = buildRegistration(config, toolNames);
-  const result = await governance.register(reg);
-
-  const enforce = createEnforcer(governance, result.id, result.level, config);
-  const audit = createAuditor(governance, result.id);
+  const core = await createAdapterCore(governance, config, { tools: toolNames, framework: "anthropic" });
+  const enforce = (toolName: string, input?: Record<string, unknown>) => core.enforce(toolName, input);
+  const audit = core.audit;
 
   const toolMap = new Map(tools.map((t) => [t.name, t]));
 
   const governedTools: AnthropicToolExecutor[] = tools.map((tool) => ({
     ...tool,
-    execute: async (input: Record<string, unknown>) => {
-      await enforce(tool.name, input);
-      try {
-        const output = await tool.execute(input);
-        await audit(tool.name, "success");
-        return output;
-      } catch (error) {
-        await audit(tool.name, "failure", { error: error instanceof Error ? error.message : String(error) });
-        throw error;
-      }
-    },
+    execute: (input: Record<string, unknown>) => core.run(tool.name, input, () => tool.execute(input)),
   }));
 
   async function handleToolUse(block: AnthropicToolUseBlock): Promise<AnthropicToolResultBlock> {
@@ -143,18 +86,17 @@ export async function governAnthropicTools(
     }
     const input = (block.input ?? {}) as Record<string, unknown>;
     try {
-      await enforce(block.name, input);
-      const output = await executor.execute(input);
-      await audit(block.name, "success");
+      const output = await core.run(block.name, input, () => executor.execute(input));
       const content = typeof output === "string" ? output : JSON.stringify(output);
       return { type: "tool_result", tool_use_id: block.id, content };
     } catch (error) {
       if (error instanceof GovernanceBlockedError || error instanceof GovernanceApprovalRequiredError) {
+        // core.run() audits its own failures; a governance refusal is
+        // audited here because it happens before the tool ever runs.
         await audit(block.name, "failure", { reason: (error as GovernanceBlockedError).decision.reason });
         return { type: "tool_result", tool_use_id: block.id, content: `Blocked: ${(error as GovernanceBlockedError).decision.reason}`, is_error: true };
       }
       const msg = error instanceof Error ? error.message : String(error);
-      await audit(block.name, "failure", { error: msg });
       return { type: "tool_result", tool_use_id: block.id, content: msg, is_error: true };
     }
   }
@@ -162,9 +104,9 @@ export async function governAnthropicTools(
   return {
     tools: governedTools,
     handleToolUse,
-    agentId: result.id,
-    score: result.score,
-    level: result.level,
+    agentId: core.agentId,
+    score: core.score,
+    level: core.agentLevel,
     governance,
     enforce,
     audit,
