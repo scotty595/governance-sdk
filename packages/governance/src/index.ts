@@ -31,6 +31,16 @@ import { createRemoteEnforcer, validateRemoteConfig, type RemoteConfig } from ".
 import { createGovernanceEmitter, type GovernanceEmitter } from "./events.js";
 import { createGovernanceMetrics, type GovernanceMetrics } from "./metrics.js";
 import { createSessionLedger, type SessionLedger, type SessionLedgerConfig } from "./session-ledger.js";
+import {
+  createPluginRegistry,
+  type AuditSink,
+  type GovernancePlugin,
+  type InstalledPlugin,
+  type KernelHandle,
+  type MaskStrategy,
+  type Reporter,
+  type VerifierKind,
+} from "./plugin.js";
 import { computeBehavioralAdjustments, applyBehavioralAdjustments } from "./behavioral-scorer.js";
 import {
   canonicalize as canonicalizeAuditEvent,
@@ -49,6 +59,13 @@ import type {
   RegisteredConditionType,
 } from "./policy.js";
 import type { GovernanceStorage, StoredAgent, AuditEvent, AuditQueryFilters } from "./storage.js";
+
+/**
+ * The kernel's version, checked against a plugin's `requires.core` range.
+ * Kept in step with `packages/governance/package.json` by
+ * `src/core-version.test.ts`.
+ */
+export const CORE_VERSION = "0.22.0";
 
 /**
  * Post-execution outcome payload for `gov.recordOutcome()`. Framework
@@ -331,6 +348,26 @@ export interface GovernanceInstance {
   ledger?: SessionLedger;
   /** How this instance behaves under failure — see `FailModes`. */
   failModes?: () => FailModes;
+  /**
+   * Install a plugin: a detector, a standards mapping, a scoring model, an
+   * identity verifier, an audit sink. Idempotent per plugin id; refuses a
+   * plugin whose `requires.core` range this kernel does not satisfy. See
+   * `plugin.ts` for the contract and docs/restructure-plan.md for why the
+   * seam exists.
+   */
+  use?: (plugin: GovernancePlugin) => Promise<void>;
+  /** Remove a plugin by id, running its `uninstall()`. Returns false if absent. */
+  unuse?: (id: string) => Promise<boolean>;
+  /** Plugins installed on this instance. */
+  plugins?: () => InstalledPlugin[];
+  /**
+   * Run a report a plugin registered (`standards/eu-ai-act`,
+   * `standards/owasp-asi`, …). Throws when no reporter is registered under
+   * that id, naming the ids that are.
+   */
+  report?: <Report = unknown>(id: string, config?: unknown) => Promise<Report>;
+  /** Verifiers plugins registered, consulted by the kernel where it has a hook. */
+  getVerifier?: (kind: VerifierKind) => unknown;
 }
 
 /** Reconstruct an AgentRegistration from a StoredAgent, including capability booleans from metadata. */
@@ -489,7 +526,9 @@ export function createGovernance(config: GovernanceConfig = {}): GovernanceInsta
 
     if (!integrity) {
       // Plain path — as before.
-      return storage.createAuditEvent(full);
+      const stored = await storage.createAuditEvent(full);
+      emitToSinks(stored);
+      return stored;
     }
 
     // Chained path. Each org has its own head + lock, so its sequence is
@@ -577,6 +616,9 @@ export function createGovernance(config: GovernanceConfig = {}): GovernanceInsta
       /* lock must advance even on failure */
     });
 
+    // Sinks see the event only once it is durably written and chained.
+    result.then(emitToSinks).catch(() => { /* reported through the caller */ });
+
     return result; // throws on failure — callers decide policy
   }
 
@@ -601,6 +643,28 @@ export function createGovernance(config: GovernanceConfig = {}): GovernanceInsta
       "hosted mode: audit.log(), recordOutcome() and kill-switch events are written to local in-memory storage, not sent to the remote API — pass `storage` (e.g. Postgres) to persist them, or rely on the hosted API's own audit trail";
     logger?.warn(msg);
     onAuditError?.(new Error(msg));
+  }
+
+  // ── Plugin surface ───────────────────────────────────────────
+  // Sinks receive every audit event after it is written (and chained, when
+  // integrity audit is on). Reporters are named reports over governance state.
+  // Verifiers are consulted by the kernel where it has a hook for them.
+  const sinks: AuditSink[] = [];
+  const reporters = new Map<string, Reporter>();
+  const verifiers = new Map<VerifierKind, unknown>();
+
+  /** Fan an written event out to sinks. Never throws into the write path. */
+  function emitToSinks(event: AuditEvent): void {
+    for (const sink of sinks) {
+      try {
+        const r = sink(event);
+        if (r && typeof (r as Promise<void>).catch === "function") {
+          (r as Promise<void>).catch((err: unknown) => { onAuditError?.(err); });
+        }
+      } catch (err) {
+        onAuditError?.(err);
+      }
+    }
   }
 
   function failModes(): FailModes {
@@ -1061,6 +1125,39 @@ export function createGovernance(config: GovernanceConfig = {}): GovernanceInsta
     });
   }
 
+  // The handle a plugin is given at install time: registration verbs, the
+  // event stream, an audit writer and the fail modes — never the instance
+  // itself, its storage or its rules.
+  const kernelHandle: KernelHandle = {
+    core: CORE_VERSION,
+    registerCondition: (entry, opts) => policies.registerCondition(entry, opts),
+    registerMaskStrategy: (conditionType: string, mask: MaskStrategy) =>
+      policies.registerMaskStrategy(conditionType, mask),
+    registerVerifier: (kind, verifier) => { verifiers.set(kind, verifier); },
+    registerReporter: (id, reporter) => {
+      if (reporters.has(id)) {
+        throw new Error(`Reporter "${id}" is already registered on this instance`);
+      }
+      reporters.set(id, reporter);
+    },
+    events,
+    audit: { log: (event) => writeAudit(event) },
+    addSink: (sink) => { sinks.push(sink); },
+    failModes,
+  };
+  const pluginRegistry = createPluginRegistry(kernelHandle, CORE_VERSION);
+
+  async function report<Report = unknown>(id: string, reportConfig?: unknown): Promise<Report> {
+    const reporter = reporters.get(id);
+    if (!reporter) {
+      const known = [...reporters.keys()].sort();
+      throw new Error(
+        `No reporter registered under "${id}". ${known.length > 0 ? `Registered: ${known.join(", ")}.` : "Install a plugin that registers one, e.g. gov.use(euAiActPlugin())."}`,
+      );
+    }
+    return (await reporter(reportConfig)) as Report;
+  }
+
   const instance: GovernanceInstance = {
     register, enforce, enforcePreprocess, enforceToolResult, enforcePostprocess, audit,
     recordOutcome,
@@ -1082,6 +1179,11 @@ export function createGovernance(config: GovernanceConfig = {}): GovernanceInsta
     metrics,
     ...(ledger ? { ledger } : {}),
     failModes,
+    use: (plugin) => pluginRegistry.use(plugin),
+    unuse: (id) => pluginRegistry.unuse(id),
+    plugins: () => pluginRegistry.list(),
+    report,
+    getVerifier: (kind) => verifiers.get(kind),
     ...(integrityChain ? { integrityChain } : {}),
   };
 
@@ -1102,6 +1204,18 @@ export { assessAgent, assessFleet, getGovernanceLevel } from "./scorer.js";
 export { createPolicyEngine, blockTools, allowOnlyTools, requireApproval, requireToolApproval, requireTierApproval, blockTaintedTools, toolResultInjectionGuard, tokenBudget, rateLimit, requireLevel, requireSignedIdentity, requireSequence, timeWindow, MAX_USER_PRIORITY, SYSTEM_RULE_PRIORITY, PolicyValidationError, validateRuleShape, POLICY_OUTCOMES, POLICY_STAGES, markTaint, hasTaint, appendTaint } from "./policy.js";
 export type { PolicyRule, PolicyEngine, PolicyAction, PolicyCondition, PolicyOutcome, PolicyStage, ActionTier, EnforcementContext, EnforcementDecision, PolicyEngineConfig, ConditionEvaluator, RegisteredConditionType, PolicyValidationIssue, TaintMark, TaintSource, TaintFilter } from "./policy.js";
 export { createSessionLedger } from "./session-ledger.js";
+export { createPluginRegistry, satisfiesRange, PluginError } from "./plugin.js";
+export type {
+  GovernancePlugin,
+  KernelHandle,
+  KernelCapability,
+  InstalledPlugin,
+  MaskStrategy,
+  AuditSink,
+  Reporter,
+  VerifierKind,
+  PluginRegistry,
+} from "./plugin.js";
 export type { SessionLedger, SessionLedgerConfig, SessionSnapshot } from "./session-ledger.js";
 export type { AgentRegistration, AgentFramework, AgentStatus, GovernanceAssessment, GovernanceLevel, DimensionResult, ScoreDimension, FleetSummary } from "./types.js";
 export { detectInjection, createInjectionGuard, getBuiltinPatterns } from "./injection-detect.js";

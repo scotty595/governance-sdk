@@ -11,6 +11,7 @@ import { maskSensitiveData, maskPattern, maskBlocklistTerms } from "./mask.js";
 import { conditionSupportsModalities, type Modality } from "./scan/multi-modal.js";
 import { validateRule, assertValidRule } from "./policy-validate.js";
 import { describeRemedy } from "./policy-remedies.js";
+import type { MaskStrategy } from "./plugin.js";
 import type { TaintMark } from "./taint.js";
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -344,6 +345,17 @@ export interface PolicyEngine {
   isSystemRule: (ruleId: string) => boolean;
   /** Validate a rule against this engine's registry without adding it. Returns issues (empty = valid). */
   validateRule: (rule: PolicyRule) => ReturnType<typeof validateRule>;
+  /**
+   * Teach the engine how to produce redacted text for a condition type when a
+   * `mask` rule on it matches. Without a strategy the engine fails closed and
+   * turns the decision into a `block`. Built-in content conditions
+   * (`sensitive_data_filter`, `input_pattern`, `output_pattern`, `blocklist`)
+   * are registered at construction; plugins add their own through
+   * `KernelHandle.registerMaskStrategy`.
+   */
+  registerMaskStrategy: (conditionType: string, mask: MaskStrategy) => void;
+  /** Whether a mask strategy is registered for `conditionType`. */
+  hasMaskStrategy: (conditionType: string) => boolean;
   getRules: (stage?: PolicyStage) => PolicyRule[];
   ruleCount: number;
   /** Register a custom condition type on this engine instance */
@@ -476,28 +488,28 @@ export function createPolicyEngine(config: PolicyEngineConfig = {}): PolicyEngin
     return "";
   }
 
+  // How to redact, per condition type. Built-ins cover the content conditions
+  // the kernel ships; plugins add theirs through registerMaskStrategy(). A
+  // condition with no strategy cannot be masked, and the engine says so by
+  // failing closed rather than passing the original text through.
+  const maskStrategies = new Map<string, MaskStrategy>([
+    ["sensitive_data_filter", (text, params) => maskSensitiveData(text, params.patterns as string[] | undefined)],
+    ["output_pattern", (text, params) => maskPattern(text, params.pattern as string, params.flags as string | undefined)],
+    ["input_pattern", (text, params) => maskPattern(text, params.pattern as string, params.flags as string | undefined)],
+    ["blocklist", (text, params) => maskBlocklistTerms(text, params.terms as string[])],
+  ]);
+
   /**
    * Compute masked text when outcome is "mask". Returns `undefined` when no
    * redaction can be produced — the caller then fails closed rather than
    * returning the original text under a "mask" label.
    */
   function computeMaskedText(rule: PolicyRule, ctx: EnforcementContext): string | undefined {
-    const { type, params } = rule.condition;
     const text = textFor(ctx);
     if (!text) return undefined;
-
-    if (type === "sensitive_data_filter") {
-      return maskSensitiveData(text, params.patterns as string[] | undefined);
-    }
-    if (type === "output_pattern" || type === "input_pattern") {
-      return maskPattern(text, params.pattern as string, params.flags as string | undefined);
-    }
-    if (type === "blocklist") {
-      return maskBlocklistTerms(text, params.terms as string[]);
-    }
-    // Unknown masking strategy for this condition type. Passing the text
-    // through unchanged here would be a silent fail-open.
-    return undefined;
+    const strategy = maskStrategies.get(rule.condition.type);
+    if (!strategy) return undefined;
+    return strategy(text, rule.condition.params ?? {}, ctx);
   }
 
   function buildDecision(
@@ -664,6 +676,8 @@ export function createPolicyEngine(config: PolicyEngineConfig = {}): PolicyEngin
     removeSystemRule,
     isSystemRule: (id) => systemIds.has(id),
     validateRule: (rule) => validateRule(rule, isRegistered),
+    registerMaskStrategy: (conditionType, mask) => { maskStrategies.set(conditionType, mask); },
+    hasMaskStrategy: (conditionType) => maskStrategies.has(conditionType),
     getRules,
     get ruleCount() { return rules.filter((r) => r.enabled).length; },
     registerCondition,
