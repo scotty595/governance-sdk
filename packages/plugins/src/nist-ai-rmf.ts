@@ -7,11 +7,10 @@
  * module covers a subset that has a direct SDK-level mapping. For the
  * rest, you will need external evidence.
  *
- * Does NOT yet cover **NIST AI 600-1 (GenAI Profile, July 2024)**. That is
- * on the roadmap — it adds 50+ generative-AI-specific controls (data
- * privacy, synthetic-content risks, environmental impact, human-AI
- * configuration) that require additional signals the SDK doesn't currently
- * surface. Contributions welcome.
+ * Does NOT cover **NIST AI 600-1 (GenAI Profile, July 2024)** — the
+ * generative-AI-specific controls (data privacy, synthetic-content risks,
+ * environmental impact, human-AI configuration) are a separate profile with
+ * its own mapping in `./nist-ai-600-1.ts`; run both for a GenAI system.
  *
  * This is a self-assessment helper, not a certified NIST assessment.
  * Function definitions are in nist-ai-rmf-articles.ts.
@@ -95,9 +94,9 @@ export async function assessNistAiRmf(
     scope:
       "Covers 14 subcategories across Govern/Map/Measure/Manage. Does NOT " +
       "cover the NIST AI 600-1 (GenAI Profile, July 2024) controls — those " +
-      "require signals outside the SDK's current visibility and are on the " +
-      "roadmap. This is a self-assessment helper, not a certified NIST " +
-      "assessment.",
+      "are assessed by the separate nist-ai-600-1 mapping; run both for a " +
+      "generative-AI system. This is a self-assessment helper, not a " +
+      "certified NIST assessment.",
   };
 }
 

@@ -30,6 +30,7 @@ import {
   type MaskStrategy,
   type Reporter,
   type VerifierKind,
+  type VerifierOf,
 } from "./plugin.js";
 import { createAuditChain, resolveOrgId } from "./audit-chain.js";
 import { computeFailModes, describeFailModes, type FailModes } from "./fail-modes.js";
@@ -490,8 +491,11 @@ export interface GovernanceInstance {
    * that id, naming the ids that are.
    */
   report?: <Report = unknown, Config = unknown>(id: string, config?: Config) => Promise<Report>;
-  /** Verifiers plugins registered, consulted by the kernel where it has a hook. */
-  getVerifier?: (kind: VerifierKind) => unknown;
+  /**
+   * Verifiers plugins registered, consulted by the kernel where it has a hook.
+   * Typed through `VerifierRegistry` once the registering plugin is imported.
+   */
+  getVerifier?: <K extends VerifierKind>(kind: K) => VerifierOf<K> | undefined;
 }
 
 /** Reconstruct an AgentRegistration from a StoredAgent, including capability booleans from metadata. */
@@ -968,7 +972,8 @@ export function createGovernanceKernel(config: GovernanceConfig = {}): Governanc
     unuse: (id) => pluginRegistry.unuse(id),
     plugins: () => pluginRegistry.list(),
     report,
-    getVerifier: (kind) => verifiers.get(kind),
+    // The map is heterogeneous by design; `VerifierRegistry` is the contract.
+    getVerifier: <K extends VerifierKind>(kind: K) => verifiers.get(kind) as VerifierOf<K> | undefined,
     ...(integrityChain ? { integrityChain } : {}),
   };
 

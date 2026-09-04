@@ -1,11 +1,89 @@
 # Changelog
 
-## [Unreleased] — Kernel and plugins: the restructure, phase A
+## [Unreleased] — Kernel and plugins: the restructure
 
 Splits the SDK into a kernel and the things that attach to it. Nothing about
 the public API changes: every existing export, subpath and behaviour is
 unchanged, and the full suite passes without a single test being rewritten to
 accommodate the move. See `docs/restructure-plan.md`.
+
+### Changed — the package split (phase B)
+
+- **Four packages.** `@governance-sdk/core` (the kernel, depends on nothing),
+  `@governance-sdk/plugins` (extensions), `@governance-sdk/adapters`
+  (framework adapters and the Agent Hooks surface), and `governance-sdk`, the
+  meta-package you install. The three scoped packages are `private: true`
+  under a placeholder scope; nothing new is publishable and renaming the scope
+  is one find-and-replace. All 53 published subpaths keep working through
+  compatibility shims that say which package now owns each.
+- **The kernel imports nothing from the extension layer.** Every layering
+  exception is gone: detection conditions, the sensitive-data evaluator and
+  its masker, tool-result scanning, the modality gate, and scoring all left
+  core. `createGovernanceKernel()` builds a bare kernel; `createGovernance()`
+  is that plus `defaultExtensions()`. `KernelExtensions` is deliberately
+  synchronous, unlike the plugin contract: a built-in condition must work on
+  the first `enforce()`, and `register()` returns a score, so neither can wait
+  on a promise.
+- **Scoring is a kernel extension.** A bare kernel's `register()` returns
+  level 0 labelled "Unscored" with an empty `dimensions` array — which cannot
+  be misread as a scorer that ran and found zeros — and `score()` /
+  `scoreFleet()` throw `NoScorerError` rather than returning `null` or an
+  empty summary, both of which already mean something else.
+- **The layering lint compares imports against declared dependencies**, per
+  package, rather than paths. It catches a dependency that only resolves
+  because npm hoisted it, and a test reaching across a boundary its package
+  does not declare. The scanner ignores comments and template literals; its
+  first run reported fifty violations that were `import` lines inside JSDoc
+  examples and the CLI's scaffold.
+- `tsconfig.base.json` holds the shared compiler settings; `tsc -b` builds the
+  packages in dependency order; `npm ci` → build → lint → test verified
+  against a clean tree.
+
+### Added — new surface (phase C)
+
+- **Claude Agent SDK adapter** (`governance-sdk/plugins/claude-agent`).
+  `canUseTool` and the `PreToolUse` / `PostToolUse` hooks decide every tool
+  call at the `process` stage and scan every tool result; a refusal is
+  returned as the SDK's own deny rather than thrown into its error path.
+  `preprocess()` / `postprocess()` are functions for the host's prompt and
+  final answer, since the SDK exposes no hook for those. The SDK is not
+  vendored, so the types describe its documented surface; a mismatch is a
+  compile error in `query({ options })`, never a bypass.
+- **Cloudflare Agents adapter** (`governance-sdk/plugins/cloudflare-agents`).
+  Wraps AI-SDK-shaped tools' `execute`; `needsApproval(tool, input)` is a
+  predicate for Cloudflare's confirmation prompt and is deliberately not
+  auto-attached, because a chat confirmation is not the governance approval.
+  Web-standard only, asserted by a test that walks the import graph.
+  `AgentFramework` gains `"cloudflare"`.
+- **Adapter kernel: `decide()` and `notify()`.** `enforce()` fires the
+  outcome callbacks then throws; `enforceStage()` does neither; three
+  verdict-returning seams (`canUseTool`, the hook, Agent Hooks `preTool`)
+  each wanted callbacks without the throw and had reimplemented it. One
+  dispatch now owns which callback fires for which outcome.
+- **Three standards mappings** as modules and plugins: NIST AI 600-1
+  (`governance-sdk/nist-ai-600-1`: 19 subcategories with the twelve §2 GAI
+  risks rolled up; bias and environmental impact by attestation), CSA AI
+  Controls Matrix v1.1 (`governance-sdk/csa-aicm`: 18 domains enumerated, 10
+  scored, no individual control objective assessed because the spreadsheet is
+  gated, and the report says so) and IMDA's agentic framework
+  (`governance-sdk/imda-agentic`: v1.0, 17 requirements; v1.5 of May 2026 is
+  not yet diffed). `allStandardsPlugins()` returns seven. The NIST AI RMF
+  report's `scope` now points at the 600-1 mapping instead of calling it
+  roadmap.
+- **Externally issued identity.** `governance-sdk/identity-jwt` verifies
+  RS256, ES256 and EdDSA JWTs on Web Crypto with the algorithm fixed by the key
+  material (`HS*` and `none` cannot be enabled); `createJwksResolver()` is
+  bounded by key cap, TTL, per-`kid` cooldown, a refetch budget and request
+  coalescing. `governance-sdk/identity-spiffe` adds strict SPIFFE ID parsing
+  and JWT-SVID verification. `governance-sdk/ext/identity` registers a
+  verifier under `gov.getVerifier("identity")` that returns the exact context
+  fields `require_signed_identity` reads and writes an `identity_verification`
+  audit event carrying the delegation chain. X.509-SVIDs are not verified.
+- **`VerifierRegistry`.** `registerVerifier()` and `getVerifier()` are typed
+  through an open interface the registering plugin augments by declaration
+  merging, so importing the identity plugin is what makes
+  `getVerifier("identity")` typed. The kernel never imports a plugin's types.
+- Eight new subpaths, 61 export paths in total. 2,099 tests.
 
 ### Added
 

@@ -61,14 +61,21 @@ describe("standards plugins — version gating", () => {
       "standards/owasp-asi": "2026.0.0",
       "standards/nist-ai-rmf": "1.0.0",
       "standards/iso-42001": "2023.0.0",
+      // NIST AI 600-1 approved 2024-07-25, published July 2024.
+      "standards/nist-ai-600-1": "2024.7.26",
+      // AICM v1.1, released 2026-06-22.
+      "standards/csa-aicm": "1.1.0",
+      // IMDA MGF for Agentic AI v1.0, published 2026-01-22 (v1.5 not yet mapped).
+      "standards/imda-agentic": "2026.1.22",
     });
   });
 
-  it("installs all four side by side", async () => {
+  it("installs all seven side by side", async () => {
     const gov = createGovernance();
     for (const plugin of allStandardsPlugins()) await gov.use!(plugin);
     assert.deepEqual(gov.plugins!().map((p) => p.id).sort(), [
-      "standards/eu-ai-act", "standards/iso-42001", "standards/nist-ai-rmf", "standards/owasp-asi",
+      "standards/csa-aicm", "standards/eu-ai-act", "standards/imda-agentic", "standards/iso-42001",
+      "standards/nist-ai-600-1", "standards/nist-ai-rmf", "standards/owasp-asi",
     ]);
   });
 

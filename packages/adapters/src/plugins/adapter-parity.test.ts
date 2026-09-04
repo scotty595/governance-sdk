@@ -25,6 +25,8 @@ import type { EnforcementDecision, PolicyRule } from "@governance-sdk/core/polic
 import { GovernanceApprovalRequiredError, GovernanceBlockedError } from "./outcome-handler.js";
 import { governAnthropicTools } from "./anthropic.js";
 import { createGovernedBedrock } from "./bedrock.js";
+import { createClaudeAgentGovernance } from "./claude-agent.js";
+import { governCloudflareTools } from "./cloudflare-agents.js";
 import { governGenkitTools } from "./genkit.js";
 import { governTools as governLangChainTools } from "./langchain.js";
 import { governLlamaIndexTools } from "./llamaindex.js";
@@ -121,6 +123,31 @@ const adapters: Record<string, AdapterFactory> = {
     const { guardToolUse, level } = await createGovernedBedrock(gov, async () => ({}), config);
     return { level, invoke: () => guardToolUse({ toolUseId: "t1", name: tool, input: {} }) };
   },
+  "claude-agent": async (gov, tool, config) => {
+    // Declares the tool so the scorer sees the same registration as the wrappers do.
+    const governed = await createClaudeAgentGovernance(gov, { ...config, tools: [tool] });
+    return {
+      level: governed.level,
+      invoke: async () => {
+        // The SDK wants a verdict, not an exception: translate the deny back
+        // into the shared error vocabulary the harness speaks.
+        const result = await governed.canUseTool(tool, {});
+        if (result.behavior === "deny") {
+          const Refusal = result.decision.outcome === "require_approval" ? GovernanceApprovalRequiredError : GovernanceBlockedError;
+          throw new Refusal(result.decision, tool);
+        }
+        // The return value reaches governance through PostToolUse — this adapter's tool_result stage.
+        await governed.postToolUse({ hook_event_name: "PostToolUse", tool_name: tool, tool_input: {}, tool_response: "ok" });
+        return "ok";
+      },
+    };
+  },
+  "cloudflare-agents": async (gov, tool, config) => {
+    const { tools, level } = await governCloudflareTools(gov, {
+      [tool]: { description: tool, inputSchema: {}, execute: async () => "ok" },
+    }, config);
+    return { level, invoke: () => Promise.resolve(tools[tool].execute!({}, { toolCallId: "c1" })) };
+  },
   genkit: async (gov, tool, config) => {
     const { tools, level } = await governGenkitTools(gov, [
       { name: tool, description: tool, call: async () => "ok" },
@@ -167,7 +194,7 @@ const adapters: Record<string, AdapterFactory> = {
 };
 
 /** Adapters with a `tool_result` stage — the only ones that accrue taint. */
-const RESULT_SCANNING = ["genkit", "langchain", "llamaindex", "mcp", "openai-agents"] as const;
+const RESULT_SCANNING = ["claude-agent", "cloudflare-agents", "genkit", "langchain", "llamaindex", "mcp", "openai-agents"] as const;
 
 /** Run one tool call through every adapter, each on a fresh governance instance. */
 async function runAll(

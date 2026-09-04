@@ -76,7 +76,7 @@ model.
 | Rule validation at add time | operator error | A typo cannot become a rule that silently fails open. |
 | Bounded regex cost | 5 | Every built-in pattern is tested against pathological inputs under a time budget. |
 | HMAC-chained audit | 4 (without the key) | Edits, interior deletions, reordering and forged inserts are detectable offline. |
-| Identity (Ed25519 tokens, `requireSignedIdentity`) | 3, impersonation | Audience, issuer, replay and rotation checks available; host performs the vault lookup. |
+| Identity (Ed25519 tokens; JWT/JWKS and SPIFFE via `identityPlugin`; `requireSignedIdentity`) | 3, impersonation | Audience, issuer, replay and rotation checks; external JWTs verify RS256 / ES256 / EdDSA only, with the algorithm fixed by the key so confusion attacks have nothing to confuse; the JWKS cache is bounded against attacker-chosen `kid`s. Host performs the vault lookup and spreads the check into `enforce()`. |
 | Explicit fail modes (`failModes()`, `strict`) | operator error | The deployment knows which way each subsystem fails. |
 
 ## What is explicitly not defended

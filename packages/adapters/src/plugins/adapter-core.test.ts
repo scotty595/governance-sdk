@@ -55,6 +55,31 @@ describe("createAdapterCore", () => {
     await assert.rejects(() => throwing.enforce("rm"), GovernanceBlockedError);
   });
 
+  it("decide() and notify() fire the callbacks enforce() fires, without the throw", async () => {
+    const gov = createGovernance({ rules: [blockTools(["rm"])] });
+    const seen: string[] = [];
+    const core = await createAdapterCore(gov, cfg, {
+      framework: "custom",
+      callbacks: {
+        onDecision: (_d, tool) => seen.push(`decision:${tool}`),
+        onBlocked: (_d, tool) => seen.push(`blocked:${tool}`),
+      },
+    });
+
+    const decision = await core.decide("rm", { path: "/" });
+    assert.equal(decision.outcome, "block", "the verdict comes back as a decision");
+    assert.deepEqual(seen, ["decision:rm", "blocked:rm"]);
+
+    // A decision made elsewhere — a result scan, a stage-scoped enforce —
+    // goes through the same dispatch.
+    assert.equal(core.notify(decision, "rm"), decision);
+    assert.deepEqual(seen, ["decision:rm", "blocked:rm", "decision:rm", "blocked:rm"]);
+
+    // Without callbacks both are inert on the callback side and still return.
+    const silent = await createAdapterCore(gov, cfg, { framework: "custom" });
+    assert.equal((await silent.decide("rm")).outcome, "block");
+  });
+
   it("assembles tier, extracted fields and taint into one context", async () => {
     const gov = createGovernance();
     const core = await createAdapterCore(gov, { ...cfg, toolTiers: { wipe: "irreversible" } }, { framework: "custom" });

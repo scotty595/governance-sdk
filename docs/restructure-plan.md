@@ -1,8 +1,11 @@
 # Restructure plan: kernel and plugins
 
-Status: **plan, not started.** This document closes the hardening roadmap and
-opens the next one. Nothing here changes behaviour; it changes where code
-lives, how it is versioned, and what the SDK promises to keep stable.
+Status: **implemented — phases A, B and C landed.** This document closed the
+hardening roadmap and opened this one; the status table under each phase
+records what actually shipped and where it diverged from what was planned.
+Phases A and B changed where code lives, how it is versioned, and what the
+SDK promises to keep stable, without changing behaviour. Phase C added
+surface on top of that.
 
 ## Why
 
@@ -18,7 +21,8 @@ shape of the problem clear:
   bug is structural, not accidental, as long as each adapter re-declares the
   same scaffold (nine copies of `createEnforcer` and `createAuditor`, eight of
   `buildRegistration`, six each of the text extractors).
-- The four standards mappings revise on four external clocks. OWASP is annual.
+- The standards mappings (four when this was written, seven now) revise on
+  external clocks. OWASP is annual.
   The EU moved a date by sixteen months with one regulation. ISO 27090 and
   27091 publish this year. Coupling those to the core's semver means a core
   release for a date change, or a stale core.
@@ -197,8 +201,7 @@ This single rule is what stops the kernel from silently re-growing.
 
 ### Phase A — in-place (no import changes) · 2–3 weeks
 
-**Status: in progress.** Steps 1, 3 and 4 have landed; 2 and 5 are underway.
-What is already true on the branch:
+**Status: done.** All five steps landed. What is true on the branch:
 
 | Step | State | Evidence |
 |---|---|---|
@@ -206,7 +209,7 @@ What is already true on the branch:
 | 2. Adapter kernel, adapters ported | done, wider than planned | `src/plugins/adapter-core.ts`, `text-extract.ts`; all ten adapters and nine wrappers ported, 851 lines deleted |
 | 3. `index.ts` split | done | `audit-chain.ts`, `scoring-hooks.ts`, `fail-modes.ts`; index.ts 1,141 → 869 |
 | 4. Layering lint | done | `scripts/check-layering.mjs`, wired into `npm run lint` |
-| 5. Stricter tsconfig | in progress | `noUnusedLocals` on; `noUncheckedIndexedAccess` 163 → 53 and falling |
+| 5. Stricter tsconfig | done | `noUnusedLocals` and `noUncheckedIndexedAccess` on in `tsconfig.base.json`; the last of the 163 findings were two real bugs (see the 0.22 changelog) |
 
 Phase B step 7 ("port the remaining adapters") was absorbed into Phase A step
 2, because porting four adapters and leaving six on the old scaffold would
@@ -301,6 +304,32 @@ re-exports pass the existing test suite unchanged.
 11. Identity verifiers for externally issued JWT (Entra, Okta, Auth0) and
     SPIFFE SVIDs; delegation claims (`actor`, `principal`) carried into audit
     events.
+
+**Status: done.** Every step landed; two of them narrower than written, and
+both say so in their module headers and report text.
+
+| Step | State | Evidence |
+|---|---|---|
+| 8. Claude Agent SDK and Cloudflare Agents adapters | done | `packages/adapters/src/plugins/claude-agent.ts`, `cloudflare-agents.ts`; both in `adapter-parity.test.ts`. Neither SDK is vendored, so the types describe the documented surface; a mismatch is a compile error in the host, never a bypass. |
+| 9. Agent Hooks conformance | done | `packages/adapters/src/conformance/agent-hooks.ts` and its suite, run by `npm test` on every CI push |
+| 10. NIST AI 600-1, CSA AICM v1.1, IMDA agentic | done, CSA narrower | `nist-ai-600-1.ts`, `csa-aicm.ts`, `imda-agentic.ts` plus `standards-rollup.ts`; `allStandardsPlugins()` returns seven. CSA scores 10 of 18 domains because the control objectives are gated. IMDA maps v1.0; v1.5 (May 2026) has the same structure and is not yet diffed. Each report carries a revision and its source URLs. |
+| 11. External identity | done, X.509 excluded | `identity-jwt.ts`, `identity-jwt-keys.ts`, `identity-jwt-claims.ts`, `identity-jwks.ts`, `identity-spiffe.ts`, `ext/identity-plugin.ts`. RS256 / ES256 / EdDSA on Web Crypto; `HS*` deliberately not enableable. Delegation (`act`, `azp`, `actor`) lands in `identity_verification` audit events. X.509-SVIDs need chain validation Web Crypto does not provide. |
+
+Two things this phase changed about the kernel, both because a second
+consumer asked for them:
+
+- **The adapter kernel gained `decide()` and `notify()`.** `enforce()`
+  couples the outcome callbacks to throwing and `enforceStage()` fires none;
+  `canUseTool`, the `PreToolUse` hook and Agent Hooks all wanted the middle,
+  and each had reimplemented it. One dispatch now decides which callback fires
+  for which outcome, and the two entry points differ only in whether they
+  throw.
+- **`VerifierRegistry` types `getVerifier()`.** The kernel declares an open
+  interface; the plugin that registers a verifier augments it by declaration
+  merging. A host that imports the identity plugin gets a typed
+  `getVerifier("identity")`; one that does not gets `unknown`. The kernel
+  never learns a plugin's types, which is the layering rule applied to the
+  type level.
 
 ### Deprecation timeline
 

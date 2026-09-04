@@ -112,6 +112,8 @@ export type {
   AuditSink,
   Reporter,
   VerifierKind,
+  VerifierRegistry,
+  VerifierOf,
   PluginRegistry,
 } from "@governance-sdk/core/plugin.js";
 export type { SessionLedger, SessionLedgerConfig, SessionSnapshot } from "@governance-sdk/core/session-ledger.js";

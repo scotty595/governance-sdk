@@ -126,6 +126,14 @@
       "types": "./dist/plugins/ollama.d.ts",
       "import": "./dist/plugins/ollama.js"
     },
+    "./plugins/claude-agent": {
+      "types": "./dist/plugins/claude-agent.d.ts",
+      "import": "./dist/plugins/claude-agent.js"
+    },
+    "./plugins/cloudflare-agents": {
+      "types": "./dist/plugins/cloudflare-agents.d.ts",
+      "import": "./dist/plugins/cloudflare-agents.js"
+    },
     "./owasp-agentic": {
       "types": "./dist/owasp-agentic.d.ts",
       "import": "./dist/owasp-agentic.js"
@@ -221,6 +229,30 @@
     "./ext/detect": {
       "types": "./dist/ext/detect-plugin.d.ts",
       "import": "./dist/ext/detect-plugin.js"
+    },
+    "./identity-jwt": {
+      "types": "./dist/identity-jwt.d.ts",
+      "import": "./dist/identity-jwt.js"
+    },
+    "./identity-spiffe": {
+      "types": "./dist/identity-spiffe.d.ts",
+      "import": "./dist/identity-spiffe.js"
+    },
+    "./ext/identity": {
+      "types": "./dist/ext/identity-plugin.d.ts",
+      "import": "./dist/ext/identity-plugin.js"
+    },
+    "./nist-ai-600-1": {
+      "types": "./dist/nist-ai-600-1.d.ts",
+      "import": "./dist/nist-ai-600-1.js"
+    },
+    "./csa-aicm": {
+      "types": "./dist/csa-aicm.d.ts",
+      "import": "./dist/csa-aicm.js"
+    },
+    "./imda-agentic": {
+      "types": "./dist/imda-agentic.d.ts",
+      "import": "./dist/imda-agentic.js"
     }
   },
   "files": [

@@ -172,10 +172,9 @@ export async function createAgentHooksAdapter(
     output: (text) => textStage("postprocess", text),
 
     async preTool(tool, args) {
-      // enforce() here rather than core.enforce(), because Agent Hooks wants a
-      // verdict returned, not an exception thrown.
-      const decision = await governance.enforce(core.context({ tool, input: args }));
-      return toVerdict(decision);
+      // decide() rather than enforce(): Agent Hooks wants a verdict returned,
+      // not an exception thrown.
+      return toVerdict(await core.decide(tool, args));
     },
 
     async postTool(tool, result, args) {

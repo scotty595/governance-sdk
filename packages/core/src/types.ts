@@ -20,6 +20,7 @@ export type AgentFramework =
   | "ollama"
   | "e2b"
   | "composio"
+  | "cloudflare"
   | "custom"
   | "unknown";
 

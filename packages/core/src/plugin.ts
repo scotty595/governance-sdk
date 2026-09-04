@@ -74,8 +74,26 @@ export type Reporter<Config = unknown, Report = unknown> = (config: Config) => P
  */
 export type Disposer = () => void;
 
+/**
+ * What each verifier kind is, for the type system. Deliberately open: the
+ * plugin that registers a verifier augments this interface, so
+ * `gov.getVerifier("identity")` comes back typed for hosts that import the
+ * plugin and stays `unknown` for hosts that do not. The kernel never learns
+ * the plugin's types.
+ *
+ * ```ts
+ * declare module "@governance-sdk/core/plugin.js" {
+ *   interface VerifierRegistry { identity: RegisteredIdentityVerifier }
+ * }
+ * ```
+ */
+export interface VerifierRegistry {}
+
 /** Verifier kinds the kernel knows how to consult. */
-export type VerifierKind = "identity" | "remote-decision";
+export type VerifierKind = "identity" | "remote-decision" | (keyof VerifierRegistry & string);
+
+/** The registered type for a kind, or `unknown` until a plugin declares it. */
+export type VerifierOf<K extends VerifierKind> = K extends keyof VerifierRegistry ? VerifierRegistry[K] : unknown;
 
 /** What `gov.failModes()` reports, re-declared structurally to avoid a cycle. */
 export interface KernelFailModes {
@@ -105,8 +123,11 @@ export interface KernelHandle {
   registerCondition(entry: RegisteredConditionType, opts?: { override?: boolean }): Disposer;
   /** Teach the engine how to redact for a condition type it can now match. */
   registerMaskStrategy(conditionType: string, mask: MaskStrategy): Disposer;
-  /** Register a verifier the kernel consults (identity, remote decisions). */
-  registerVerifier(kind: VerifierKind, verifier: unknown): Disposer;
+  /**
+   * Register a verifier the kernel consults (identity, remote decisions).
+   * Typed through `VerifierRegistry` once the plugin declares its kind.
+   */
+  registerVerifier<K extends VerifierKind>(kind: K, verifier: VerifierOf<K>): Disposer;
   /**
    * Register a named report over governance state (EU AI Act, OWASP, …).
    * `Config` and `Report` flow through to `gov.report()` for callers who name

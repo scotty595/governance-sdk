@@ -27,7 +27,7 @@ import type {
 import type { AgentRegistration, AgentFramework } from "@governance-sdk/core/types.js";
 import { appendTaint, type TaintMark } from "@governance-sdk/core/taint.js";
 import { scanToolResult, type ScanToolResultInput, type ScanToolResultOutput } from "./tool-result-scan.js";
-import { handleOutcome, type OutcomeCallbacks } from "./outcome-handler.js";
+import { handleOutcome, notifyOutcome, type OutcomeCallbacks } from "./outcome-handler.js";
 import {
   enforcePreprocess as runPreprocess,
   enforcePostprocess as runPostprocess,
@@ -133,6 +133,19 @@ export interface AdapterCore {
   enforce(toolName: string, input?: Record<string, unknown>, call?: CallContext): Promise<EnforcementDecision>;
   /** Enforce at a specific stage without throwing; the caller decides. */
   enforceStage(stage: PolicyStage, call: CallContext): Promise<EnforcementDecision>;
+  /**
+   * A `process`-stage decision with the outcome callbacks fired but nothing
+   * thrown — the middle ground between `enforce()` (callbacks, then throw)
+   * and `enforceStage()` (neither), for frameworks that want a verdict
+   * returned rather than an exception raised: Claude's `canUseTool`, the
+   * Agent Hooks contract.
+   */
+  decide(toolName: string, input?: Record<string, unknown>, call?: CallContext): Promise<EnforcementDecision>;
+  /**
+   * Fire the outcome callbacks for a decision made elsewhere — a result scan,
+   * a stage-scoped enforce — without throwing. Returns the decision.
+   */
+  notify(decision: EnforcementDecision, toolName: string): EnforcementDecision;
   /** Write a tool-call audit event. */
   audit(toolName: string, outcome: "success" | "failure", detail?: Record<string, unknown>): Promise<AuditEvent>;
   /** Scan a tool's return value at the `tool_result` stage, recording provenance. */
@@ -290,6 +303,18 @@ export function attachAdapterCore(
     return decision;
   }
 
+  async function decide(
+    toolName: string,
+    input?: Record<string, unknown>,
+    call: CallContext = {},
+  ): Promise<EnforcementDecision> {
+    return notify(await governance.enforce(context({ ...call, tool: toolName, input })), toolName);
+  }
+
+  function notify(decision: EnforcementDecision, toolName: string): EnforcementDecision {
+    return identity.callbacks ? notifyOutcome(decision, toolName, identity.callbacks) : decision;
+  }
+
   async function enforceStage(stage: PolicyStage, call: CallContext): Promise<EnforcementDecision> {
     const ctx = context(call);
     switch (stage) {
@@ -379,6 +404,8 @@ export function attachAdapterCore(
     context,
     enforce,
     enforceStage,
+    decide,
+    notify,
     audit,
     scanResult,
     run,
