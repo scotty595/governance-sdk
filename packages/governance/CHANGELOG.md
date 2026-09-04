@@ -1,5 +1,80 @@
 # Changelog
 
+## [Unreleased] — Kernel and plugins: the restructure, phase A
+
+Splits the SDK into a kernel and the things that attach to it. Nothing about
+the public API changes: every existing export, subpath and behaviour is
+unchanged, and the full suite passes without a single test being rewritten to
+accommodate the move. See `docs/restructure-plan.md`.
+
+### Added
+
+- **A plugin contract.** `gov.use(plugin)` / `unuse(id)` / `plugins()` /
+  `report(id, config)`. A plugin declares `{ id, version, requires, install,
+  uninstall }` and receives a `KernelHandle` — `registerCondition`,
+  `registerMaskStrategy`, `registerVerifier`, `registerReporter`, `addSink`,
+  the event stream, an audit writer and `failModes()` — and never the
+  instance, its storage or its rules. Installation is idempotent per id and
+  refuses a plugin whose `requires.core` range the kernel does not satisfy
+  (a dependency-free semver subset whose caret pins the minor below 1.0.0,
+  which is what a 0.x kernel needs).
+- **Every register verb returns a disposer**, and the registry records them
+  per plugin, so `unuse()` rolls a plugin back in full without the author
+  tracking anything — including restoring a built-in condition the plugin
+  overrode. A plugin's own `uninstall()` is now only for what the kernel never
+  saw. This came directly from the contract's first consumer, which could not
+  write an honest `uninstall()` against the first draft.
+- **Standards, scoring and detection ship as plugins**:
+  `governance-sdk/ext/{standards,scoring,detect}`. Each standards plugin
+  carries the revision it implements as its version, so OWASP's annual
+  revision and a regulator moving a date stop being kernel releases. The
+  direct exports (`mapToEuAiAct`, `assessAgent`, `detectInjection`) are
+  unchanged and additive.
+- **Agent Hooks conformance**: `governance-sdk/conformance/agent-hooks`
+  implements all eight interception points of the framework-neutral contract,
+  so a runtime that speaks it can drive this SDK. The contract's two lossy
+  edges are stated in the mapping: `require_approval` becomes a deny carrying
+  its approval id and poll URL, and `warn` becomes an allow carrying an
+  annotation.
+- **A shared adapter kernel.** `createAdapterCore` / `attachAdapterCore` own
+  registration, context assembly, enforcement, audit, provenance and the
+  enforce-run-audit wrapper. Every adapter now also gets consequence tiers
+  (`toolTiers`), taint propagation, and target path and URL extraction from
+  tool arguments — capabilities only the Mastra processor had.
+- **A layering lint** (`scripts/check-layering.mjs`, in `npm run lint`)
+  enforcing that core imports neither adapters nor ext, by logical membership
+  rather than by directory, so the rule bites before the packages exist. Eight
+  real violations are recorded with the phase that removes each; the lint fails
+  on a new one and on an exception that no longer matches a real import.
+- `InjectionDetectorConfig.patterns` replaces the built-in corpus outright,
+  which is what a caller swapping in their own detector needs;
+  `customPatterns` still adds to it. `extractStrings` is exported so an
+  overriding condition uses the same input walk as the built-in.
+
+### Fixed
+
+- **`verifyAuditIntegrity` and `AuditIntegrity.verify` threw a `TypeError` on
+  a sparse, null-holed or undated chain** instead of reporting a break. A
+  verifier that crashes on a tampered export is indistinguishable from one
+  with no opinion. Both now return a break at the offending index.
+- Nine adapters' private scaffolds are gone — eight copies of
+  `buildRegistration`, nine each of `createEnforcer` and `createAuditor`, four
+  of `createResultScanner`, six of `contentToText`, seven of
+  `extractLastUserText`, six of `replaceLastUserText`, 851 lines in all. That
+  duplication is what let nine adapters drift onto `agentLevel: 0`.
+- The ReDoS guard asserted a wall-clock budget, which measured machine
+  contention as much as the code and failed only under a loaded suite. It now
+  asserts that cost stays linear in input size, which survives load and fails
+  on a quadratic pattern even on fast hardware.
+
+### Changed
+
+- `index.ts` split into `audit-chain.ts`, `scoring-hooks.ts` and
+  `fail-modes.ts` (1,141 lines to 869). `packages/governance/src/plugins/`
+  gained `adapter-core.ts` and `text-extract.ts`.
+- `noUnusedLocals` is on. Every adapter file is under the 300-line rule,
+  including the three that were over it.
+
 ## [0.22.0] - 2026-09-04 — Kernel hardening, fail-closed defaults, tiers and provenance
 
 Closes the four high-severity findings from the September 2026 review and the

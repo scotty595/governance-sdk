@@ -202,13 +202,17 @@ What is already true on the branch:
 
 | Step | State | Evidence |
 |---|---|---|
-| 1. `gov.use()` and `KernelHandle` | done | `src/plugin.ts`, `src/plugin.test.ts` |
-| 2. Adapter kernel, four adapters ported | in progress | `src/plugins/adapter-core.ts`, Anthropic and Mastra ported |
+| 1. `gov.use()` and `KernelHandle` | done | `src/plugin.ts`, `src/plugin.test.ts`, `src/ext/**` (standards, scoring, detection ported onto it) |
+| 2. Adapter kernel, adapters ported | done, and wider than planned | `src/plugins/adapter-core.ts`, `text-extract.ts`; all ten adapters and nine wrappers ported, 851 lines deleted |
 | 3. `index.ts` split | done | `audit-chain.ts`, `scoring-hooks.ts`, `fail-modes.ts`; index.ts 1,141 → 869 |
 | 4. Layering lint | done | `scripts/check-layering.mjs`, wired into `npm run lint` |
-| 5. Stricter tsconfig | in progress | `noUnusedLocals` on; 163 `noUncheckedIndexedAccess` errors being worked down |
+| 5. Stricter tsconfig | in progress | `noUnusedLocals` on; `noUncheckedIndexedAccess` 163 → 53 and falling |
 
-Two things the work changed about the plan itself:
+Phase B step 7 ("port the remaining adapters") was absorbed into Phase A step
+2, because porting four adapters and leaving six on the old scaffold would
+have meant maintaining both shapes across the package move.
+
+Three things the work changed about the plan itself:
 
 - **The layering rule is enforced by logical membership, not by directory.**
   Waiting for the package split to enforce it would have meant discovering the
@@ -220,6 +224,14 @@ Two things the work changed about the plan itself:
 - **A public barrel re-exporting `ext` is the design, not a violation.** That
   is exactly what the `governance-sdk` meta-package becomes. The lint checks
   real imports in `index.ts` but allows `export ... from`.
+- **The contract needed disposers, and its first consumer proved it.** The
+  draft in this document gave plugins five register verbs and no way to undo
+  any of them, so `uninstall()` could not be honest and the documented
+  "unuse then reinstall at a new version" flow threw. Every register verb now
+  returns a disposer and the registry rolls them back automatically. The rule
+  that produced this — anything a plugin needs that is not on the handle is a
+  kernel feature request, not a cast — is the reason it surfaced as a design
+  question rather than as five casts in a plugin.
 
 1. Add `gov.use()` and `KernelHandle` to the current package. Port the
    standards mappings, scoring and detection to register through it, inside
