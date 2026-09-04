@@ -23,8 +23,10 @@ describe("standards plugins — malformed rows", () => {
     const bare = { ...whole, id: "bare", name: "bare", tools: undefined } as unknown as StoredAgent;
 
     for (const plugin of allStandardsPlugins()) {
-      const report = await gov.report<{ disclaimer?: string }>(plugin.id, { governance: gov, agents: [whole, bare] });
-      assert.equal(typeof report.disclaimer, "string", `${plugin.id} produced a report`);
+      // Not every mapping has a `disclaimer` field (OWASP does not); what
+      // matters is that the report resolves rather than throwing on the row.
+      const report = await gov.report<Record<string, unknown>>(plugin.id, { governance: gov, agents: [whole, bare] });
+      assert.equal(typeof report, "object", `${plugin.id} produced a report`);
     }
   });
 });
