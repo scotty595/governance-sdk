@@ -18,6 +18,32 @@ guarantee names the test file that asserts it.
 | Every non-allow decision names the stage, the condition type and, for built-in conditions, a one-line remedy. | `policy-remedies.ts` | `policy-decision-detail.test.ts` |
 | First match wins. Rules are evaluated in descending priority; ties keep insertion order. No combination of outcomes. | `policy.ts` | `policy.test.ts` |
 
+## Plugins and conformance
+
+| Guarantee | Enforced by | Asserted in |
+|---|---|---|
+| `gov.use()` is idempotent per plugin id, and refuses a second version of an installed id rather than silently keeping either. | `plugin.ts` | `plugin.test.ts` |
+| A plugin whose `requires.core` range this kernel does not satisfy, or that requires a capability the kernel lacks, is refused at install time. | `plugin.ts` | `plugin.test.ts` |
+| A plugin receives a `KernelHandle` with five registration verbs, the event stream, an audit writer and `failModes()` — never the instance, its storage or its rules. | `plugin.ts` | `plugin.test.ts` |
+| A condition a plugin registers is validated exactly like a built-in, so a rule naming it before the plugin is installed is rejected when the rule is added. | `policy-validate.ts` | `plugin.test.ts` |
+| An audit sink receives every event after it is written and chained. A sink that throws or rejects is routed to `onAuditError` and cannot change a decision. | `index.ts`, `audit-chain.ts` | `plugin.test.ts` |
+| A `mask` rule on a condition with no registered mask strategy still fails closed to `block`. | `policy.ts` | `plugin.test.ts` |
+| All eight Agent Hooks interception points are implemented, and every SDK outcome maps to a defined verdict. | `conformance/agent-hooks.ts` | `conformance/agent-hooks.test.ts` |
+| `preTool` returns a deny verdict rather than throwing; `postTool` hands back the substituted payload, never the original poisoned value. | `conformance/agent-hooks.ts` | `conformance/agent-hooks.test.ts` |
+
+Not guaranteed, and stated in the mapping itself: Agent Hooks has no state
+between allow and deny, so `require_approval` arrives as a deny carrying its
+approval id and poll URL, and `warn` arrives as an allow carrying an
+annotation. A host that ignores annotations loses the warning. That is a
+property of the contract, not of this implementation.
+
+## Layering
+
+| Guarantee | Enforced by | Asserted in |
+|---|---|---|
+| Core never imports an adapter or an ext module. Eight exceptions remain, each recorded with the reason and the phase that removes it. | `scripts/check-layering.mjs` | `npm run lint` in CI |
+| An exception that no longer matches a real import fails the lint, so a fix cannot leave dead scaffolding behind. | `scripts/check-layering.mjs` | `npm run lint` in CI |
+
 ## Kill switch
 
 | Guarantee | Enforced by | Asserted in |

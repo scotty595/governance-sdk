@@ -260,6 +260,62 @@ if (decision.outcome === 'require_approval') {
 }
 ```
 
+### Plugins
+
+Detection corpora, standards mappings, scoring models, identity verifiers and
+audit destinations revise on other people's schedules — OWASP annually, a
+regulator by sixteen months at a stroke, an acquired detector library by
+ceasing to ship. They attach to the kernel through a contract instead of
+living inside its semver:
+
+```typescript
+import { createGovernance } from 'governance-sdk';
+
+const gov = createGovernance();
+
+await gov.use({
+  id: 'sinks/otel',
+  version: '1.0.0',
+  requires: { core: '^0.22.0', capabilities: ['sinks'] },
+  install(kernel) {
+    kernel.addSink((event) => span(event));          // every audit event, after it is chained
+    kernel.registerCondition({ /* … */ });            // validated like a built-in from now on
+    kernel.registerMaskStrategy('my_condition', redact);
+    kernel.registerReporter('standards/my-standard', assess);
+    kernel.events.on('enforcement', onDecision);
+  },
+});
+
+gov.plugins();                       // [{ id, version, installedAt }]
+await gov.report('standards/my-standard', { agents });
+await gov.unuse('sinks/otel');
+```
+
+A plugin receives a `KernelHandle` — five registration verbs, the event
+stream, an audit writer and `failModes()` — and never the instance, its
+storage or its rules. `use()` is idempotent per id and refuses a plugin whose
+`requires.core` range this kernel does not satisfy. Anything a plugin needs
+that the handle does not offer is a kernel feature request, not a cast.
+
+### Agent Hooks conformance
+
+[Agent Hooks](https://commandline.microsoft.com/agent-hooks-framework-neutral-ai-governance-contract/)
+is an open, framework-neutral governance contract: eight interception points,
+three verdicts. Any runtime that speaks it can drive this SDK:
+
+```typescript
+import { createAgentHooksAdapter } from 'governance-sdk/conformance/agent-hooks';
+
+const hooks = await createAgentHooksAdapter(gov, { agentName: 'support', owner: 'team' });
+await hooks.preTool('send_email', { to: 'customer@example.com' });
+// => { verdict: 'deny' | 'allow' | 'transform', reason?, payload?, approval?, decision? }
+```
+
+Two edges of that contract are lossy, and the mapping says so rather than
+hiding it: `require_approval` becomes a deny carrying the approval id and poll
+URL, because the contract has no third state; and `warn` becomes an allow
+carrying an annotation, so a host that ignores annotations loses the warning.
+
 ### Custom Conditions
 
 When the built-in condition types aren't enough, register your own evaluators directly on the governance instance — no need to drop down to `createPolicyEngine` for this. Pass them at construction or register them at runtime:
