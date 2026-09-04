@@ -22,9 +22,7 @@
  * ```
  */
 
-import type { GovernanceInstance, AuditEvent } from "../index";
-import type { EnforcementDecision, PolicyAction } from "../policy";
-import type { AgentRegistration } from "../types";
+import type { GovernanceInstance } from "../index";
 import type {
   GenkitTool, GenkitFlow,
   GovernGenkitConfig, GovernedGenkitToolsResult, GovernedGenkitFlowResult,
@@ -36,9 +34,8 @@ export type {
   GovernGenkitConfig, GovernedGenkitToolsResult, GovernedGenkitFlowResult,
 } from "./genkit-types.js";
 
-import { handleOutcome } from "./outcome-handler.js";
-import type { OutcomeCallbacks } from "./outcome-handler.js";
-import { scanToolResult } from "../tool-result-scan.js";
+import { createAdapterCore } from "./adapter-core.js";
+import type { AdapterCore } from "./adapter-core.js";
 
 // ─── Blocked Error ──────────────────────────────────────────
 
@@ -58,93 +55,43 @@ export {
   createGovernedGenerateStream,
 } from "./genkit-generate.js";
 
-// ─── Shared Helpers ─────────────────────────────────────────
-
-function buildRegistration(config: GovernGenkitConfig, toolNames: string[]): AgentRegistration {
-  return {
-    id: config.agentId,
-    name: config.agentName,
-    framework: config.framework ?? "genkit",
-    owner: config.owner,
-    description: config.description,
-    version: config.version,
-    channels: config.channels,
-    tools: toolNames,
-    hasAuth: config.hasAuth,
-    hasGuardrails: config.hasGuardrails,
-    hasObservability: config.hasObservability,
-    hasAuditLog: true,
-    permissions: config.permissions,
-    metadata: config.metadata,
-  };
-}
-
-function createEnforcer(governance: GovernanceInstance, agentId: string, agentLevel: number, config: GovernGenkitConfig) {
-  return async (toolName: string, input?: Record<string, unknown>): Promise<EnforcementDecision> => {
-    const action = config.actionMapper?.(toolName) ?? ("tool_call" as PolicyAction);
-    const decision = await governance.enforce({
-      agentId, agentName: config.agentName, agentLevel,
-      action, tool: toolName, input,
-      sessionTokensUsed: config.sessionTokenTracker?.(),
-    });
-    handleOutcome(decision, toolName, config as OutcomeCallbacks);
-    return decision;
-  };
-}
-
-function createAuditor(governance: GovernanceInstance, agentId: string) {
-  return (toolName: string, outcome: "success" | "failure", detail?: Record<string, unknown>): Promise<AuditEvent> =>
-    governance.audit.log({
-      agentId, eventType: "tool_call", outcome,
-      severity: outcome === "failure" ? "warning" : "info",
-      detail: { tool: toolName, ...detail },
-    });
-}
-
 /**
- * Build a result-scan closure bound to this governance instance + agent.
- * Returned function: takes the tool's raw output, runs it through the
- * policy engine at stage="tool_result", returns either the original
- * output (allow) or a redacted detail object (block / require_approval).
- *
- * No-op when `config.scanToolResults === false`. Default-on so any
- * Genkit user upgrading to SDK 0.15+ gets injection scanning of tool
- * returns automatically — same default as the Mastra processor.
+ * Run the tool's raw output through the policy engine at stage `tool_result`,
+ * returning either the original (allow) or a redacted detail object (block /
+ * require_approval). No-op when `config.scanToolResults === false` — the
+ * default is on, so any Genkit user gets injection scanning of tool returns
+ * automatically, the same default as the Mastra processor.
  */
-function createResultScanner(
-  governance: GovernanceInstance, agentId: string, config: GovernGenkitConfig,
-) {
-  return async (toolName: string, args: Record<string, unknown> | undefined, output: unknown): Promise<unknown> => {
-    if (config.scanToolResults === false) return output;
-    const scanned = await scanToolResult({
-      governance, agentId, agentName: config.agentName, tool: toolName,
-      args, result: output,
-      injectionThreshold: config.toolResultInjectionThreshold,
-    });
-    return scanned.result;
-  };
+async function scanOutput(
+  core: AdapterCore,
+  config: GovernGenkitConfig,
+  toolName: string,
+  args: Record<string, unknown> | undefined,
+  output: unknown,
+): Promise<unknown> {
+  if (config.scanToolResults === false) return output;
+  const scanned = await core.scanResult({
+    tool: toolName, args, result: output,
+    injectionThreshold: config.toolResultInjectionThreshold,
+  });
+  return scanned.result;
 }
 
-function wrapTool(
-  tool: GenkitTool,
-  enforce: ReturnType<typeof createEnforcer>,
-  audit: ReturnType<typeof createAuditor>,
-  scanResult: ReturnType<typeof createResultScanner>,
-): GenkitTool {
+function wrapTool(tool: GenkitTool, core: AdapterCore, config: GovernGenkitConfig): GenkitTool {
   return {
     ...tool,
     call: async (input: unknown, options?: Record<string, unknown>): Promise<unknown> => {
       const inputRecord = typeof input === "object" && input !== null ? input as Record<string, unknown> : { input };
-      await enforce(tool.name, inputRecord);
+      await core.enforce(tool.name, inputRecord);
       try {
         const output = await tool.call(input, options);
         // Scan tool result before returning to the agent loop. On block
         // the LLM gets a redacted detail object in place of the original.
-        const finalOutput = await scanResult(tool.name, inputRecord, output);
-        await audit(tool.name, "success");
+        const finalOutput = await scanOutput(core, config, tool.name, inputRecord, output);
+        await core.audit(tool.name, "success");
         return finalOutput;
       } catch (error) {
-        await audit(tool.name, "failure", { error: error instanceof Error ? error.message : String(error) });
+        await core.audit(tool.name, "failure", { error: error instanceof Error ? error.message : String(error) });
         throw error;
       }
     },
@@ -158,22 +105,18 @@ export async function governGenkitTools(
   tools: GenkitTool[],
   config: GovernGenkitConfig,
 ): Promise<GovernedGenkitToolsResult> {
-  const toolNames = tools.map((t) => t.name);
-  const reg = buildRegistration(config, toolNames);
-  const result = await governance.register(reg);
-
-  const enforce = createEnforcer(governance, result.id, result.level, config);
-  const audit = createAuditor(governance, result.id);
-  const scanResult = createResultScanner(governance, result.id, config);
+  const core = await createAdapterCore(governance, config, {
+    tools: tools.map((t) => t.name), framework: "genkit", callbacks: config,
+  });
 
   return {
-    tools: tools.map((tool) => wrapTool(tool, enforce, audit, scanResult)),
-    agentId: result.id,
-    score: result.score,
-    level: result.level,
+    tools: tools.map((tool) => wrapTool(tool, core, config)),
+    agentId: core.agentId,
+    score: core.score,
+    level: core.agentLevel,
     governance,
-    enforce,
-    audit,
+    enforce: (toolName, input) => core.enforce(toolName, input),
+    audit: core.audit,
   };
 }
 
@@ -184,33 +127,22 @@ export async function governGenkitFlow(
   flow: GenkitFlow,
   config: GovernGenkitConfig,
 ): Promise<GovernedGenkitFlowResult> {
-  const reg = buildRegistration(config, [flow.name]);
-  const result = await governance.register(reg);
-
-  const enforce = createEnforcer(governance, result.id, result.level, config);
-  const audit = createAuditor(governance, result.id);
+  const core = await createAdapterCore(governance, config, {
+    tools: [flow.name], framework: "genkit", callbacks: config,
+  });
 
   const governedFlow: GenkitFlow = {
     ...flow,
-    call: async (input: unknown): Promise<unknown> => {
+    call: (input: unknown): Promise<unknown> => {
       const inputRecord = typeof input === "object" && input !== null ? input as Record<string, unknown> : { input };
-      await enforce(flow.name, inputRecord);
-
-      try {
-        const output = await flow.call(input);
-        await audit(flow.name, "success");
-        return output;
-      } catch (error) {
-        await audit(flow.name, "failure", { error: error instanceof Error ? error.message : String(error) });
-        throw error;
-      }
+      return core.run(flow.name, inputRecord, () => flow.call(input));
     },
   };
 
   return {
     flow: governedFlow,
-    agentId: result.id,
-    score: result.score,
-    level: result.level,
+    agentId: core.agentId,
+    score: core.score,
+    level: core.agentLevel,
   };
 }

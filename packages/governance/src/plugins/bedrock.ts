@@ -25,9 +25,8 @@
  * ```
  */
 
-import type { GovernanceInstance, AuditEvent } from "../index";
-import type { EnforcementDecision, PolicyAction } from "../policy";
-import type { AgentRegistration } from "../types";
+import type { GovernanceInstance } from "../index";
+import type { EnforcementDecision } from "../policy";
 import type {
   BedrockInvokeAgentInput, BedrockActionGroupInvocation, BedrockToolUseBlock,
   GovernBedrockConfig, GovernedBedrockResult, BedrockInvokeHandler,
@@ -43,56 +42,14 @@ export type {
   GovernBedrockConfig, GovernedBedrockResult, BedrockInvokeHandler,
 } from "./bedrock-types.js";
 
-import { handleOutcome, GovernanceBlockedError } from "./outcome-handler.js";
+import { GovernanceBlockedError } from "./outcome-handler.js";
 import type { OutcomeCallbacks } from "./outcome-handler.js";
 import { enforcePreprocess, enforcePostprocess } from "./pre-post-enforce.js";
+import { createAdapterCore } from "./adapter-core.js";
 
 // ─── Blocked Error ──────────────────────────────────────────
 
 export { GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outcome-handler.js";
-
-// ─── Shared Helpers ─────────────────────────────────────────
-
-function buildRegistration(config: GovernBedrockConfig): AgentRegistration {
-  return {
-    id: config.agentId,
-    name: config.agentName,
-    framework: config.framework ?? "bedrock",
-    owner: config.owner,
-    description: config.description,
-    version: config.version,
-    channels: config.channels,
-    tools: config.tools,
-    hasAuth: config.hasAuth ?? true, // Bedrock uses IAM auth by default
-    hasGuardrails: config.hasGuardrails,
-    hasObservability: config.hasObservability,
-    hasAuditLog: true,
-    permissions: config.permissions,
-    metadata: config.metadata,
-  };
-}
-
-function createEnforcer(governance: GovernanceInstance, agentId: string, agentLevel: number, config: GovernBedrockConfig) {
-  return async (toolName: string, input?: Record<string, unknown>): Promise<EnforcementDecision> => {
-    const action = config.actionMapper?.(toolName) ?? ("tool_call" as PolicyAction);
-    const decision = await governance.enforce({
-      agentId, agentName: config.agentName, agentLevel,
-      action, tool: toolName, input,
-      sessionTokensUsed: config.sessionTokenTracker?.(),
-    });
-    handleOutcome(decision, toolName, config as OutcomeCallbacks);
-    return decision;
-  };
-}
-
-function createAuditor(governance: GovernanceInstance, agentId: string) {
-  return (toolName: string, outcome: "success" | "failure", detail?: Record<string, unknown>): Promise<AuditEvent> =>
-    governance.audit.log({
-      agentId, eventType: "tool_call", outcome,
-      severity: outcome === "failure" ? "warning" : "info",
-      detail: { tool: toolName, ...detail },
-    });
-}
 
 // ─── Create Governed Bedrock ────────────────────────────────
 
@@ -107,11 +64,14 @@ export async function createGovernedBedrock(
   invokeHandler: BedrockInvokeHandler,
   config: GovernBedrockConfig,
 ): Promise<GovernedBedrockResult> {
-  const reg = buildRegistration(config);
-  const result = await governance.register(reg);
-
-  const enforce = createEnforcer(governance, result.id, result.level, config);
-  const audit = createAuditor(governance, result.id);
+  // Bedrock uses IAM auth by default, so `hasAuth` defaults to true here.
+  const core = await createAdapterCore(
+    governance,
+    { ...config, hasAuth: config.hasAuth ?? true },
+    { tools: config.tools ?? [], framework: "bedrock", callbacks: config },
+  );
+  const enforce = (toolName: string, input?: Record<string, unknown>) => core.enforce(toolName, input);
+  const audit = core.audit;
 
   async function invokeAgent(input: BedrockInvokeAgentInput): Promise<unknown> {
     const toolName = `bedrock:${input.agentId}:${input.agentAliasId}`;
@@ -122,9 +82,9 @@ export async function createGovernedBedrock(
     // the prompt coming in and the final text coming out.
     if ((config.preprocess ?? true) && input.inputText) {
       await enforcePreprocess(governance, input.inputText, {
-        agentId: result.id,
+        agentId: core.agentId,
         agentName: config.agentName,
-        agentLevel: result.level,
+        agentLevel: core.agentLevel,
         metadata: config.metadata,
         sessionTokensUsed: config.sessionTokenTracker?.(),
         callbacks: config as OutcomeCallbacks,
@@ -167,9 +127,9 @@ export async function createGovernedBedrock(
   async function scanOutput(outputText: string): Promise<string> {
     if (!(config.postprocess ?? true)) return outputText;
     const post = await enforcePostprocess(governance, outputText, {
-      agentId: result.id,
+      agentId: core.agentId,
       agentName: config.agentName,
-      agentLevel: result.level,
+      agentLevel: core.agentLevel,
       metadata: config.metadata,
       sessionTokensUsed: config.sessionTokenTracker?.(),
       callbacks: config as OutcomeCallbacks,
@@ -221,9 +181,9 @@ export async function createGovernedBedrock(
     guardActionGroup,
     guardToolUse,
     scanOutput,
-    agentId: result.id,
-    score: result.score,
-    level: result.level,
+    agentId: core.agentId,
+    score: core.score,
+    level: core.agentLevel,
     governance,
     enforce,
     audit,

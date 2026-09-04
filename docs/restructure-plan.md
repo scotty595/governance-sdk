@@ -197,6 +197,30 @@ This single rule is what stops the kernel from silently re-growing.
 
 ### Phase A — in-place (no import changes) · 2–3 weeks
 
+**Status: in progress.** Steps 1, 3 and 4 have landed; 2 and 5 are underway.
+What is already true on the branch:
+
+| Step | State | Evidence |
+|---|---|---|
+| 1. `gov.use()` and `KernelHandle` | done | `src/plugin.ts`, `src/plugin.test.ts` |
+| 2. Adapter kernel, four adapters ported | in progress | `src/plugins/adapter-core.ts`, Anthropic and Mastra ported |
+| 3. `index.ts` split | done | `audit-chain.ts`, `scoring-hooks.ts`, `fail-modes.ts`; index.ts 1,141 → 869 |
+| 4. Layering lint | done | `scripts/check-layering.mjs`, wired into `npm run lint` |
+| 5. Stricter tsconfig | in progress | `noUnusedLocals` on; 163 `noUncheckedIndexedAccess` errors being worked down |
+
+Two things the work changed about the plan itself:
+
+- **The layering rule is enforced by logical membership, not by directory.**
+  Waiting for the package split to enforce it would have meant discovering the
+  coupling during the move. `LOGICAL_EXT` in the lint names the files that are
+  destined for `ext` while they still sit in the core directory, so the rule
+  bites today. Eight real violations are recorded with the phase that removes
+  each; the lint fails on a new one *and* on an exception that no longer
+  matches a real import.
+- **A public barrel re-exporting `ext` is the design, not a violation.** That
+  is exactly what the `governance-sdk` meta-package becomes. The lint checks
+  real imports in `index.ts` but allows `export ... from`.
+
 1. Add `gov.use()` and `KernelHandle` to the current package. Port the
    standards mappings, scoring and detection to register through it, inside
    the same package. Root exports keep working.
@@ -262,7 +286,11 @@ re-exports pass the existing test suite unchanged.
 ## Acceptance criteria for the restructure as a whole
 
 - `packages/core` under 4k lines, zero runtime deps, zero imports from
-  adapters or plugins (lint-enforced).
+  adapters or plugins (lint-enforced). **Measured after the index.ts split:
+  4,341 lines across 17 files.** The overshoot is the eight recorded layering
+  exceptions — the detector, the mask corpus and the scorer are still reachable
+  from core. Moving them in Phase B is what brings the number down; shaving
+  lines any other way would be gaming the measure.
 - Every adapter passes the parity test; maintained-tier adapters under 200
   lines each.
 - `governance-sdk` meta-package: today's full test suite passes against the

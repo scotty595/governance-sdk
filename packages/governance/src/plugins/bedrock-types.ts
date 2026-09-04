@@ -6,8 +6,8 @@
  */
 
 import type { GovernanceInstance, AuditEvent } from "../index";
-import type { EnforcementDecision, PolicyAction } from "../policy";
-import type { AgentFramework } from "../types";
+import type { EnforcementDecision } from "../policy";
+import type { AdapterConfig } from "./adapter-core.js";
 
 // ─── Bedrock Agent Runtime Shapes ──────────────────────────
 
@@ -144,35 +144,22 @@ export interface BedrockToolConfiguration {
 
 // ─── Configuration ──────────────────────────────────────────
 
-export interface GovernBedrockConfig {
-  /**
-   * Optional stable agent id, forwarded to `gov.register({ id })`. Pass the
-   * same value on every process start so registration re-binds to the
-   * existing agent row in durable storage instead of creating a new one.
-   * Omit to let the SDK mint a fresh UUID on each registration.
-   * This is the governance-sdk agent id — not the Bedrock `agentId` you
-   * pass to `invokeAgent`.
-   */
-  agentId?: string;
-  agentName: string;
-  owner: string;
-  framework?: AgentFramework;
-  description?: string;
-  version?: string;
-  channels?: string[];
+/**
+ * Extends the shared `AdapterConfig`. Beyond the Bedrock-specific fields
+ * below it accepts every cross-adapter option: `agentId` (the governance-sdk
+ * agent id — not the Bedrock `agentId` you pass to `invokeAgent`),
+ * `agentName`, `owner`, `framework`, `metadata`, `actionMapper`,
+ * `sessionTokenTracker`, the `onBlocked` / `onDecision` / `onWarn` /
+ * `onMask` / `onApprovalRequired` callbacks, plus `toolTiers` (consequence
+ * tiers for `requireTierApproval()`), `trackTaint` (provenance carried onto
+ * later calls, for `blockTaintedTools()`) and `toolFieldExtraction` (map
+ * tool arguments onto `ctx.targetPath` / `ctx.targetUrl`).
+ *
+ * `hasAuth` defaults to `true` here — Bedrock uses IAM auth.
+ */
+export interface GovernBedrockConfig extends AdapterConfig {
+  /** Tool names declared at registration. */
   tools?: string[];
-  hasAuth?: boolean;
-  hasGuardrails?: boolean;
-  hasObservability?: boolean;
-  permissions?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
-  onBlocked?: (decision: EnforcementDecision, toolName: string) => void;
-  onDecision?: (decision: EnforcementDecision, toolName: string) => void;
-  onWarn?: (decision: EnforcementDecision, toolName: string) => void;
-  onMask?: (decision: EnforcementDecision, toolName: string, maskedText: string) => void;
-  onApprovalRequired?: (decision: EnforcementDecision, toolName: string) => void;
-  actionMapper?: (toolName: string) => PolicyAction;
-  sessionTokenTracker?: () => number;
   /**
    * Pre-scan the user inputText before invokeAgent runs (default: true).
    * Entry-gate only — Bedrock Agents execute internal tool calls server-side
