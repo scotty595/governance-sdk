@@ -24,7 +24,7 @@
  * @packageDocumentation
  */
 
-import { assessAgent, assessFleet, getGovernanceLevel, computeCompositeScore } from "./scorer.js";
+import { assessAgent } from "./scorer.js";
 import { createPolicyEngine } from "./policy.js";
 import { createMemoryStorage } from "./storage.js";
 import { createRemoteEnforcer, validateRemoteConfig, type RemoteConfig } from "./remote-enforce.js";
@@ -41,14 +41,11 @@ import {
   type Reporter,
   type VerifierKind,
 } from "./plugin.js";
-import { computeBehavioralAdjustments, applyBehavioralAdjustments } from "./behavioral-scorer.js";
-import {
-  canonicalize as canonicalizeAuditEvent,
-  hmacSha256,
-  GENESIS_HASH,
-  type AuditIntegrity,
-  type IntegrityAuditEvent,
-} from "./audit-integrity.js";
+import { createAuditChain, resolveOrgId } from "./audit-chain.js";
+import { createScoringHooks } from "./scoring-hooks.js";
+import { computeFailModes, describeFailModes, type FailModes } from "./fail-modes.js";
+export type { FailModes };
+import type { IntegrityAuditEvent } from "./audit-integrity.js";
 import type { AgentRegistration, GovernanceAssessment, FleetSummary } from "./types.js";
 import type {
   PolicyRule,
@@ -101,28 +98,6 @@ export interface ActionOutcome {
   policyRuleId?: string;
   /** Optional extra fields. */
   detail?: Record<string, unknown>;
-}
-
-/**
- * How each subsystem behaves when something goes wrong. Returned by
- * `gov.failModes()` and summarised in one line through `config.logger` at
- * construction, so a deployment never has to guess which way it fails.
- */
-export interface FailModes {
-  mode: "local" | "hosted";
-  strict: boolean;
-  /** Decision returned when the remote API is unreachable (hosted mode only). */
-  remoteFallback: "allow" | "block" | "n/a";
-  /** What `enforce()` does when a chained audit write fails. */
-  integrityAudit: "off" | "allow" | "block";
-  /** A `mask` rule that cannot produce redacted text degrades to `block`. Always. */
-  maskFailure: "block";
-  /** Rules with unknown condition types or bad shapes are rejected when added. Always. */
-  unknownCondition: "reject";
-  /** Kill-switch rules apply at every stage and are checked locally even in hosted mode. Always. */
-  killSwitch: "all-stages";
-  /** Whether the per-process session ledger fills budget / rate-limit counters. */
-  ledger: "on" | "off";
 }
 
 // Re-export storage types (other modules import from ./index)
@@ -429,198 +404,31 @@ export function createGovernance(config: GovernanceConfig = {}): GovernanceInsta
     conditions: config.conditions,
   });
 
-  // ── Integrity audit chain (opt-in) ───────────────────────────
-  //
-  // When `integrityAudit` is configured, every write routed through
-  // `writeAudit()` gets HMAC-SHA256 hash-chained. The chain state
-  // (sequence, last hash, per-event integrity) is persisted to durable
-  // storage through GovernanceStorage.createAuditEventWithIntegrity() so
-  // the chain survives process restarts. Chain resume on boot is handled
-  // by loadChainHead() below.
-  //
-  // Serialisation via `chainLock` prevents concurrent writes from forking
-  // the chain within a single process. Cross-process safety is provided
-  // by the UNIQUE index on integrity_sequence at the storage layer.
-  // Per-org chain state. Each organization gets its OWN hash chain (own head,
-  // own sequence 1..N, own write lock) so one org's audit trail is never
-  // interleaved with another's — an org can export + verify its slice
-  // standalone, and cross-org tampering breaks the chain. Events with no
-  // organizationId share a single sentinel bucket (backward-compatible with
-  // the original global chain).
-  const GLOBAL_CHAIN_KEY = "global";
-  interface OrgChainState {
-    lastHash: string;
-    sequence: number;
-    loaded: boolean;
-    loadPromise: Promise<void> | null;
-    /** Serialises writes for THIS org so its sequence is race-free. */
-    lock: Promise<unknown>;
-  }
-  const orgChains = new Map<string, OrgChainState>();
-  function chainStateFor(organizationId: string | undefined): OrgChainState {
-    // Namespaced so no real organization id can collide with the org-less bucket.
-    const key = organizationId === undefined ? GLOBAL_CHAIN_KEY : `org:${organizationId}`;
-    let state = orgChains.get(key);
-    if (!state) {
-      state = { lastHash: GENESIS_HASH, sequence: 0, loaded: false, loadPromise: null, lock: Promise.resolve() };
-      orgChains.set(key, state);
-    }
-    return state;
-  }
-  // Fallback in-memory index for adapters that don't implement
-  // createAuditEventWithIntegrity (e.g. third-party 0.11.x adapters).
-  // When the storage adapter IS integrity-aware, we don't populate this
-  // map — reads go back to storage.getAuditIntegrity().
-  const integrityIndex = new Map<string, AuditIntegrity>();
-  const storageHasIntegrity =
-    typeof storage.createAuditEventWithIntegrity === "function" &&
-    typeof storage.getAuditIntegrity === "function";
-  // Durable integrity READS only need getAuditIntegrity — an adapter can
-  // implement the newer appendToAuditChain write contract + getAuditIntegrity
-  // without the legacy createAuditEventWithIntegrity. export()/verify() must
-  // still read that durable integrity rather than the (empty) in-process index.
-  const storageCanReadIntegrity = typeof storage.getAuditIntegrity === "function";
-  // Multi-writer-safe path: the adapter allocates the sequence + previous-hash
-  // from the durable head atomically (per-org lock), so concurrent processes
-  // never fork the chain or collide on a sequence. Preferred when available.
-  const storageHasAtomicAppend = typeof storage.appendToAuditChain === "function";
-  // One-time advisory: an adapter with durable integrity but no atomic append
-  // uses process-local sequence allocation, which is only safe under a single
-  // writer. Signalled once so multi-process deployments aren't silently unsafe.
-  let warnedNonAtomicAppend = false;
+  // ── Plugin surface ───────────────────────────────────────────
+  // Sinks receive every audit event after it is written (and chained, when
+  // integrity audit is on). Reporters are named reports over governance state.
+  // Verifiers are consulted by the kernel where it has a hook for them.
+  const sinks: AuditSink[] = [];
+  const reporters = new Map<string, Reporter>();
+  const verifiers = new Map<VerifierKind, unknown>();
 
-  /** Resolve the org id from an explicit field, falling back to metadata. */
-  function resolveOrgId(
-    explicit: string | undefined,
-    metadata: Record<string, unknown> | undefined,
-  ): string | undefined {
-    if (explicit) return explicit;
-    const fromMeta = metadata?.organizationId;
-    return typeof fromMeta === "string" && fromMeta.length > 0 ? fromMeta : undefined;
-  }
-
-  async function loadChainHead(state: OrgChainState, organizationId: string | undefined): Promise<void> {
-    if (state.loaded || !integrity) return;
-    if (state.loadPromise) return state.loadPromise;
-    state.loadPromise = (async () => {
-      if (typeof storage.getChainHead === "function") {
-        const head = await storage.getChainHead(organizationId);
-        if (head) {
-          state.lastHash = head.hash;
-          state.sequence = head.sequence;
+  /** Fan a written event out to sinks. Never throws into the write path. */
+  function emitToSinks(event: AuditEvent): void {
+    for (const sink of sinks) {
+      try {
+        const r = sink(event);
+        if (r && typeof (r as Promise<void>).catch === "function") {
+          (r as Promise<void>).catch((err: unknown) => { onAuditError?.(err); });
         }
+      } catch (err) {
+        onAuditError?.(err);
       }
-      state.loaded = true;
-    })();
-    return state.loadPromise;
-  }
-
-  async function writeAudit(
-    event: Omit<AuditEvent, "id" | "createdAt">,
-  ): Promise<AuditEvent> {
-    const full: AuditEvent = {
-      ...event,
-      id: crypto.randomUUID(),
-      createdAt: new Date().toISOString(),
-    };
-
-    if (!integrity) {
-      // Plain path — as before.
-      const stored = await storage.createAuditEvent(full);
-      emitToSinks(stored);
-      return stored;
     }
-
-    // Chained path. Each org has its own head + lock, so its sequence is
-    // contiguous within the org and independent across orgs. Serialise via
-    // the org's lock so the sequence is race-free. On failure we preserve
-    // the org's lastHash/sequence (don't bump) so the next write attempts
-    // the same slot — avoids silent gaps.
-    const state = chainStateFor(full.organizationId);
-    const result = state.lock.then(async () => {
-      // Preferred: the storage adapter allocates the sequence + previous-hash
-      // from the CURRENT durable head atomically, so this is safe across pods.
-      // The in-process `state.lock` above still serialises this pod's writes to
-      // the org (cheap local ordering ahead of the DB lock); `state.*` is only
-      // refreshed afterwards as a cache for stats(), never read to derive the
-      // next slot.
-      if (storageHasAtomicAppend) {
-        const { event: stored, integrity: integrityMeta } = await storage.appendToAuditChain!(
-          full,
-          async (head) => {
-            const previousHash = head?.hash ?? GENESIS_HASH;
-            const nextSequence = (head?.sequence ?? 0) + 1;
-            const canonical = canonicalizeAuditEvent(full, previousHash, nextSequence);
-            const hash = await hmacSha256(integrity.signingKey, canonical);
-            return { hash, previousHash, sequence: nextSequence, signedAt: new Date().toISOString() };
-          },
-        );
-        state.lastHash = integrityMeta.hash;
-        state.sequence = integrityMeta.sequence;
-        state.loaded = true;
-        return stored;
-      }
-
-      // Process-local sequence path (no appendToAuditChain). Correct under a
-      // SINGLE writer only. Warn once so custom adapters in multi-process
-      // deployments get the documented signal. (The pure-legacy branch below
-      // additionally warns per-write about the non-durable session-local
-      // downgrade — a strictly more severe, data-losing failure mode.)
-      if (storageHasIntegrity && !warnedNonAtomicAppend) {
-        warnedNonAtomicAppend = true;
-        onAuditError?.(
-          new Error(
-            "integrity chain: storage adapter implements createAuditEventWithIntegrity but not appendToAuditChain; audit appends use process-local sequence allocation and are multi-process-safe only under a single writer — implement appendToAuditChain for atomic cross-process appends",
-          ),
-        );
-      }
-
-      // First call after boot: resume this org's chain from durable state.
-      if (!state.loaded) await loadChainHead(state, full.organizationId);
-
-      const previousHash = state.lastHash;
-      const nextSequence = state.sequence + 1;
-      const canonical = canonicalizeAuditEvent(full, previousHash, nextSequence);
-      const hash = await hmacSha256(integrity.signingKey, canonical);
-      const integrityMeta: AuditIntegrity = {
-        hash,
-        previousHash,
-        sequence: nextSequence,
-        signedAt: new Date().toISOString(),
-      };
-
-      let stored: AuditEvent;
-      if (storageHasIntegrity) {
-        // Durable path: integrity columns written in the same INSERT as
-        // the event. Restart-safe — getChainHead() will find this row.
-        stored = await storage.createAuditEventWithIntegrity!(full, integrityMeta);
-      } else {
-        // Legacy path: adapter predates 0.12. Event persists, integrity
-        // lives only in this process's integrityIndex. A process restart
-        // will leave earlier events unverifiable. This is a downgrade,
-        // not the default; surfaced via onAuditError below.
-        stored = await storage.createAuditEvent(full);
-        integrityIndex.set(full.id, integrityMeta);
-        onAuditError?.(
-          new Error(
-            "integrity chain: storage adapter does not implement createAuditEventWithIntegrity; chain is session-local only and will not survive process restart",
-          ),
-        );
-      }
-      state.lastHash = hash;
-      state.sequence = nextSequence;
-      return stored;
-    });
-
-    state.lock = result.catch(() => {
-      /* lock must advance even on failure */
-    });
-
-    // Sinks see the event only once it is durably written and chained.
-    result.then(emitToSinks).catch(() => { /* reported through the caller */ });
-
-    return result; // throws on failure — callers decide policy
   }
+
+  // The chain owns the write path and the per-org heads; see audit-chain.ts.
+  const chain = createAuditChain({ storage, integrity, onAuditError, emitToSinks });
+  const writeAudit = chain.writeAudit;
 
   const remote = config.serverUrl
     ? createRemoteEnforcer({
@@ -645,41 +453,15 @@ export function createGovernance(config: GovernanceConfig = {}): GovernanceInsta
     onAuditError?.(new Error(msg));
   }
 
-  // ── Plugin surface ───────────────────────────────────────────
-  // Sinks receive every audit event after it is written (and chained, when
-  // integrity audit is on). Reporters are named reports over governance state.
-  // Verifiers are consulted by the kernel where it has a hook for them.
-  const sinks: AuditSink[] = [];
-  const reporters = new Map<string, Reporter>();
-  const verifiers = new Map<VerifierKind, unknown>();
-
-  /** Fan an written event out to sinks. Never throws into the write path. */
-  function emitToSinks(event: AuditEvent): void {
-    for (const sink of sinks) {
-      try {
-        const r = sink(event);
-        if (r && typeof (r as Promise<void>).catch === "function") {
-          (r as Promise<void>).catch((err: unknown) => { onAuditError?.(err); });
-        }
-      } catch (err) {
-        onAuditError?.(err);
-      }
-    }
-  }
-
   function failModes(): FailModes {
-    return {
-      mode: remote ? "hosted" : "local",
+    return computeFailModes({
+      remote: remote !== null,
       strict,
-      remoteFallback: remote ? fallbackMode : "n/a",
-      integrityAudit: integrity ? integrity.onFailure : "off",
-      maskFailure: "block",
-      unknownCondition: "reject",
-      killSwitch: "all-stages",
-      ledger: ledger ? "on" : "off",
-    };
+      fallbackMode,
+      integrityOnFailure: integrity?.onFailure,
+      ledger: ledger !== null,
+    });
   }
-
   /** Bookkeeping shared by enforce() and enforceStage(): ledger, metrics, events. */
   function finishDecision(
     ctx: EnforcementContext,
@@ -835,106 +617,7 @@ export function createGovernance(config: GovernanceConfig = {}): GovernanceInsta
     },
   };
 
-  async function scoreAgentFn(agentId: string): Promise<GovernanceAssessment | null> {
-    const agent = await storage.getAgent(agentId);
-    if (!agent) return null;
-
-    const registration = storedToRegistration(agent);
-    const assessment = assessAgent(agentId, registration);
-
-    // Apply behavioral adjustments from audit history
-    const auditEvents = await storage.queryAuditEvents({ agentId, limit: 200 });
-    if (auditEvents.length > 0) {
-      const behavioral = computeBehavioralAdjustments({
-        events: auditEvents,
-        declaredTools: agent.tools,
-      });
-      assessment.dimensions = applyBehavioralAdjustments(
-        assessment.dimensions, behavioral.adjustments,
-      );
-    }
-
-    // Recompute composite score from adjusted dimensions
-    const newScore = computeCompositeScore(assessment.dimensions);
-    const newLevel = getGovernanceLevel(newScore);
-    assessment.compositeScore = newScore;
-    assessment.level = newLevel;
-    assessment.status = newScore >= 60 ? "approved" : newScore > 0 ? "flagged" : "registered";
-
-    await storage.updateAgent(agentId, {
-      compositeScore: newScore,
-      governanceLevel: newLevel.level,
-      status: assessment.status,
-    });
-    return assessment;
-  }
-
-  async function scoreFleetFn() {
-    const agents = await storage.listAgents();
-    const registrations = agents.map((a) => ({
-      id: a.id,
-      registration: storedToRegistration(a),
-    }));
-    const fleet = assessFleet(registrations);
-
-    // Apply behavioral adjustments to each agent assessment
-    for (const assessment of fleet.assessments) {
-      const agent = agents.find((a) => a.id === assessment.agentId);
-      if (!agent) continue;
-
-      const auditEvents = await storage.queryAuditEvents({ agentId: agent.id, limit: 200 });
-      if (auditEvents.length > 0) {
-        const behavioral = computeBehavioralAdjustments({
-          events: auditEvents,
-          declaredTools: agent.tools,
-        });
-        assessment.dimensions = applyBehavioralAdjustments(
-          assessment.dimensions, behavioral.adjustments,
-        );
-      }
-
-      const newScore = computeCompositeScore(assessment.dimensions);
-      const newLevel = getGovernanceLevel(newScore);
-      assessment.compositeScore = newScore;
-      assessment.level = newLevel;
-      assessment.status = newScore >= 60 ? "approved" : newScore > 0 ? "flagged" : "registered";
-    }
-
-    // Recompute fleet summary with adjusted scores
-    const scores = fleet.assessments.map((a) => a.compositeScore);
-    const avgScore = scores.length > 0
-      ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
-      : 0;
-    fleet.summary.averageScore = avgScore;
-    fleet.summary.fleetLevel = getGovernanceLevel(avgScore);
-
-    const sorted = [...fleet.assessments].sort((a, b) => b.compositeScore - a.compositeScore);
-    fleet.summary.highestScoring = sorted[0]
-      ? { name: sorted[0].agentName, score: sorted[0].compositeScore } : null;
-    fleet.summary.lowestScoring = sorted.length > 0
-      ? { name: sorted[sorted.length - 1].agentName, score: sorted[sorted.length - 1].compositeScore } : null;
-
-    // Recount by status and level
-    const byStatus: Record<string, number> = {
-      registered: 0, assessed: 0, approved: 0, flagged: 0, deprecated: 0, quarantined: 0,
-    };
-    const byLevel: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0 };
-    for (const a of fleet.assessments) {
-      byStatus[a.status] = (byStatus[a.status] || 0) + 1;
-      byLevel[a.level.level] = (byLevel[a.level.level] || 0) + 1;
-    }
-    fleet.summary.byStatus = byStatus as typeof fleet.summary.byStatus;
-    fleet.summary.byLevel = byLevel;
-
-    // Update fleet recommendations
-    const recs: string[] = [];
-    if (byStatus.flagged > 0) recs.push(`${byStatus.flagged} agent(s) below governance threshold — review immediately`);
-    if (byLevel[0] > 0) recs.push(`${byLevel[0]} agent(s) at Level 0 (Unregistered) — complete registration`);
-    if (avgScore < 60) recs.push("Fleet average below 60 — prioritize governance improvements before scaling");
-    fleet.summary.recommendations = recs;
-
-    return fleet;
-  }
+  const scoring = createScoringHooks(storage, storedToRegistration);
 
   async function enforceStage(ctx: EnforcementContext, stage: PolicyStage): Promise<EnforcementDecision> {
     const startedAt = performance.now();
@@ -1027,78 +710,7 @@ export function createGovernance(config: GovernanceConfig = {}): GovernanceInsta
 
   const noopStatus = () => ({ connected: true, mode: "local" as const, latencyMs: 0 });
 
-  const integrityChain = integrity
-    ? {
-        async export(filters?: AuditQueryFilters): Promise<IntegrityAuditEvent[]> {
-          // Ensure boot-time resume has run for the org being exported so
-          // stats()/export() reflect durable state even if no writes have
-          // happened yet this process. Export a single org at a time
-          // (filters.organizationId) to get a contiguous, verifiable chain.
-          const orgState = chainStateFor(filters?.organizationId);
-          if (!orgState.loaded) await loadChainHead(orgState, filters?.organizationId);
-          const events = await storage.queryAuditEvents({
-            ...filters,
-            limit: undefined,
-            offset: undefined,
-          });
-          const result: IntegrityAuditEvent[] = [];
-          // One round-trip for the whole export when the adapter supports it;
-          // otherwise the per-event read (N+1) that older adapters require.
-          const durableBatch =
-            storageCanReadIntegrity && typeof storage.getAuditIntegrityBatch === "function"
-              ? await storage.getAuditIntegrityBatch(events.map((e) => e.id))
-              : null;
-          for (const e of events) {
-            // Prefer durable integrity record; fall back to in-memory
-            // index for adapters that don't yet persist it.
-            // An id the batch did not return is re-read individually — a
-            // partial batch must never silently drop an event from the export.
-            const durable = durableBatch
-              ? durableBatch.get(e.id) ?? (storageCanReadIntegrity ? await storage.getAuditIntegrity!(e.id) : null)
-              : storageCanReadIntegrity
-                ? await storage.getAuditIntegrity!(e.id)
-                : null;
-            const meta = durable ?? integrityIndex.get(e.id);
-            if (meta) result.push({ ...e, integrity: meta });
-          }
-          // Chain order is the lock-allocated sequence, not wall clock —
-          // createdAt is stamped before the write lock and can invert under
-          // concurrent writers. createdAt only tiebreaks legacy forked rows.
-          return result.sort((a, b) => {
-            if (a.integrity.sequence !== b.integrity.sequence) {
-              return a.integrity.sequence - b.integrity.sequence;
-            }
-            return a.createdAt.localeCompare(b.createdAt);
-          });
-        },
-        async stats(organizationId?: string) {
-          // Durable head is the source of truth. Reading it FRESH per call
-          // (not the process-local cache, which only reflects this process's
-          // own appends) is what makes stats() correct under multiple writers
-          // sharing one store — same durable-head machinery export() uses.
-          // No mutation of chain state here: the write path owns
-          // orgState.lastHash/sequence under the per-org lock.
-          if (typeof storage.getChainHead === "function") {
-            const head = await storage.getChainHead(organizationId);
-            return {
-              latestSequence: head?.sequence ?? 0,
-              latestHash: head?.hash ?? GENESIS_HASH,
-              algorithm: "hmac-sha256",
-            };
-          }
-          // Adapter without a durable head (pre-0.12 / custom): fall back to
-          // this process's cache, resuming once from boot state if needed.
-          // Session-local by construction — correct single-process only.
-          const orgState = chainStateFor(organizationId);
-          if (!orgState.loaded) await loadChainHead(orgState, organizationId);
-          return {
-            latestSequence: orgState.sequence,
-            latestHash: orgState.lastHash,
-            algorithm: "hmac-sha256",
-          };
-        },
-      }
-    : undefined;
+  const integrityChain = chain.integrityChain;
 
   async function recordOutcome(outcome: ActionOutcome): Promise<AuditEvent> {
     if (ledger && (outcome.tokensUsed !== undefined || outcome.cost !== undefined)) {
@@ -1161,7 +773,7 @@ export function createGovernance(config: GovernanceConfig = {}): GovernanceInsta
   const instance: GovernanceInstance = {
     register, enforce, enforcePreprocess, enforceToolResult, enforcePostprocess, audit,
     recordOutcome,
-    score: scoreAgentFn, scoreFleet: scoreFleetFn,
+    score: scoring.scoreAgent, scoreFleet: scoring.scoreFleet,
     policies: readonlyPolicies, storage, addRule, removeRule,
     addSystemRule,
     removeSystemRule,
@@ -1189,9 +801,7 @@ export function createGovernance(config: GovernanceConfig = {}): GovernanceInsta
 
   if (logger) {
     const fm = failModes();
-    logger.info(
-      `governance-sdk: mode=${fm.mode} strict=${fm.strict} remoteFallback=${fm.remoteFallback} integrityAudit=${fm.integrityAudit} maskFailure=${fm.maskFailure} unknownCondition=${fm.unknownCondition} killSwitch=${fm.killSwitch} ledger=${fm.ledger}`,
-    );
+    logger.info(describeFailModes(fm));
   }
 
   return instance;
@@ -1203,6 +813,10 @@ export { storedToRegistration };
 export { assessAgent, assessFleet, getGovernanceLevel } from "./scorer.js";
 export { createPolicyEngine, blockTools, allowOnlyTools, requireApproval, requireToolApproval, requireTierApproval, blockTaintedTools, toolResultInjectionGuard, tokenBudget, rateLimit, requireLevel, requireSignedIdentity, requireSequence, timeWindow, MAX_USER_PRIORITY, SYSTEM_RULE_PRIORITY, PolicyValidationError, validateRuleShape, POLICY_OUTCOMES, POLICY_STAGES, markTaint, hasTaint, appendTaint } from "./policy.js";
 export type { PolicyRule, PolicyEngine, PolicyAction, PolicyCondition, PolicyOutcome, PolicyStage, ActionTier, EnforcementContext, EnforcementDecision, PolicyEngineConfig, ConditionEvaluator, RegisteredConditionType, PolicyValidationIssue, TaintMark, TaintSource, TaintFilter } from "./policy.js";
+export { createAuditChain, resolveOrgId } from "./audit-chain.js";
+export type { AuditChain, AuditChainDeps, ResolvedIntegrityConfig } from "./audit-chain.js";
+export { createScoringHooks } from "./scoring-hooks.js";
+export type { ScoringHooks } from "./scoring-hooks.js";
 export { createSessionLedger } from "./session-ledger.js";
 export { createPluginRegistry, satisfiesRange, PluginError } from "./plugin.js";
 export type {

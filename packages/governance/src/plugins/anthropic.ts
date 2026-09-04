@@ -68,7 +68,7 @@ export async function governAnthropicTools(
   config: GovernAnthropicConfig,
 ): Promise<GovernedAnthropicResult> {
   const toolNames = tools.map((t) => t.name);
-  const core = await createAdapterCore(governance, config, { tools: toolNames, framework: "anthropic" });
+  const core = await createAdapterCore(governance, config, { tools: toolNames, framework: "anthropic", callbacks: config });
   const enforce = (toolName: string, input?: Record<string, unknown>) => core.enforce(toolName, input);
   const audit = core.audit;
 

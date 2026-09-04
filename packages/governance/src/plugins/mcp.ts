@@ -23,11 +23,10 @@
  * ```
  */
 
-import type { GovernanceInstance, AuditEvent } from "../index";
-import type { EnforcementDecision, PolicyAction } from "../policy";
-import type { AgentRegistration } from "../types";
+import type { GovernanceInstance } from "../index";
+import type { PolicyAction } from "../policy";
 import { detectInjection } from "../injection-detect.js";
-import { scanToolResult } from "../tool-result-scan.js";
+import { createAdapterCore } from "./adapter-core.js";
 import type {
   MCPCallToolRequest,
   MCPCallToolResult,
@@ -47,55 +46,11 @@ export type {
   MCPToolCallHandler, MCPResourceReadHandler,
 } from "./mcp-types.js";
 
-import { handleOutcome, GovernanceBlockedError } from "./outcome-handler.js";
-import type { OutcomeCallbacks } from "./outcome-handler.js";
+import { GovernanceBlockedError } from "./outcome-handler.js";
 
 // ─── Blocked Error ──────────────────────────────────────────
 
 export { GovernanceBlockedError, GovernanceApprovalRequiredError } from "./outcome-handler.js";
-
-// ─── Shared Helpers ─────────────────────────────────────────
-
-function buildRegistration(config: GovernMCPConfig): AgentRegistration {
-  return {
-    id: config.agentId,
-    name: config.agentName,
-    framework: config.framework ?? "mcp",
-    owner: config.owner,
-    description: config.description,
-    version: config.version,
-    channels: config.channels,
-    tools: config.tools,
-    hasAuth: config.hasAuth,
-    hasGuardrails: config.hasGuardrails,
-    hasObservability: config.hasObservability,
-    hasAuditLog: true,
-    permissions: config.permissions,
-    metadata: config.metadata,
-  };
-}
-
-function createEnforcer(governance: GovernanceInstance, agentId: string, agentLevel: number, config: GovernMCPConfig) {
-  return async (toolName: string, input?: Record<string, unknown>): Promise<EnforcementDecision> => {
-    const action = config.actionMapper?.(toolName) ?? ("tool_call" as PolicyAction);
-    const decision = await governance.enforce({
-      agentId, agentName: config.agentName, agentLevel,
-      action, tool: toolName, input,
-      sessionTokensUsed: config.sessionTokenTracker?.(),
-    });
-    handleOutcome(decision, toolName, config as OutcomeCallbacks);
-    return decision;
-  };
-}
-
-function createAuditor(governance: GovernanceInstance, agentId: string) {
-  return (toolName: string, outcome: "success" | "failure", detail?: Record<string, unknown>): Promise<AuditEvent> =>
-    governance.audit.log({
-      agentId, eventType: "tool_call", outcome,
-      severity: outcome === "failure" ? "warning" : "info",
-      detail: { tool: toolName, ...detail },
-    });
-}
 
 // ─── Create Governed MCP ────────────────────────────────────
 

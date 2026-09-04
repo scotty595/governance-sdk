@@ -28,8 +28,7 @@
  */
 
 import type { GovernanceInstance, AuditEvent } from "../index";
-import type { EnforcementContext, EnforcementDecision, PolicyAction } from "../policy";
-import type { AgentRegistration } from "../types";
+import type { EnforcementDecision, PolicyAction } from "../policy";
 import type {
   MastraProcessorInterface,
   MastraToolCallInfo,
@@ -50,6 +49,7 @@ import type {
 import { governStreamChunk } from "./mastra-processor-stream.js";
 import { scanToolResult } from "../tool-result-scan.js";
 import { appendTaint, type TaintMark } from "../taint.js";
+import { createAdapterCore, type AdapterCore } from "./adapter-core.js";
 
 /** Key under which taint marks live in Mastra's per-request processor `state`. */
 const TAINT_STATE_KEY = "governance:taint";
@@ -96,6 +96,13 @@ export class GovernanceProcessor implements MastraProcessorInterface {
   private agentId: string | null = null;
   private agentLevel: number = 0;
   private registrationPromise: Promise<void> | null = null;
+  /**
+   * Shared adapter machinery, created at registration. The processor keeps
+   * its own `agentId` / `agentLevel` fields because they are public getters,
+   * but every context it builds comes from the core so a Mastra agent and,
+   * say, a Vercel agent see the identical context for the identical call.
+   */
+  private core: AdapterCore | null = null;
   private stats: ProcessorStats = {
     totalProcessed: 0, totalBlocked: 0, totalAllowed: 0,
     byTool: {}, toolResults: { scanned: 0, blocked: 0, masked: 0 },
@@ -120,28 +127,12 @@ export class GovernanceProcessor implements MastraProcessorInterface {
   }
 
   private async doRegister(): Promise<void> {
-    const registration: AgentRegistration = {
-      // Pass through the caller-supplied id when present so the runtime
-      // record binds to a pre-existing dashboard record (e.g. Lua's
-      // canonical agentId). Without this, the SDK would generate a new
-      // UUID on first register and create a duplicate row.
-      id: this.config.agentId,
-      name: this.config.agentName,
-      framework: this.config.framework ?? "mastra",
-      owner: this.config.owner,
-      description: this.config.description,
-      version: this.config.version,
-      channels: this.config.channels,
-      hasAuth: this.config.hasAuth,
-      hasGuardrails: this.config.hasGuardrails,
-      hasObservability: this.config.hasObservability,
-      hasAuditLog: this.config.hasAuditLog ?? true,
-      permissions: this.config.permissions,
-      metadata: this.config.metadata,
-    };
-    const result = await this.governance.register(registration);
-    this.agentId = result.id;
-    this.agentLevel = result.level;
+    // The caller-supplied id is passed through so the runtime record binds to
+    // a pre-existing agent row instead of minting a new UUID each restart.
+    const core = await createAdapterCore(this.governance, this.config, { framework: "mastra" });
+    this.core = core;
+    this.agentId = core.agentId;
+    this.agentLevel = core.agentLevel;
   }
 
   async processOutputStep(args: ProcessOutputStepArgs): Promise<void> {
@@ -486,24 +477,16 @@ export class GovernanceProcessor implements MastraProcessorInterface {
     // generic name conventions (path / filePath / url / href / ...) cover
     // most tools without explicit configuration.
     const toolArgs = toolCall.args as Record<string, unknown> | undefined;
-    const fields = extractFields(toolArgs, this.config.toolFieldExtraction, toolCall.toolName);
-    const actionTier = this.config.toolTiers?.[toolCall.toolName];
-    const taint = this.taintFor(args.state);
-
-    const ctx: EnforcementContext = {
-      agentId: this.agentId!,
-      agentName: this.config.agentName,
-      agentLevel: this.agentLevel,
+    // The core extracts targetPath / targetUrl from the args, applies the
+    // tool's consequence tier and carries the run's taint marks — the same
+    // assembly every other adapter now gets.
+    const ctx = this.core!.context({
       action,
       tool: toolCall.toolName,
       input: toolArgs,
-      targetPath: fields.targetPath,
-      targetUrl: fields.targetUrl,
-      sessionTokensUsed: this.config.sessionTokenTracker?.(),
-      ...(actionTier ? { actionTier } : {}),
-      ...(taint && taint.length > 0 ? { taint } : {}),
+      taint: this.taintFor(args.state) ?? [],
       ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
-    };
+    });
     return this.governance.enforce(ctx);
   }
 

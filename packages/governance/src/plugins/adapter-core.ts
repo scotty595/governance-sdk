@@ -34,7 +34,7 @@ import { extractFields, type ToolFieldExtractionRegistry } from "./mastra-proces
  * with their own framework-specific options; the fields here mean the same
  * thing everywhere.
  */
-export interface AdapterConfig extends OutcomeCallbacks {
+export interface AdapterCoreConfig {
   /**
    * Stable agent id, forwarded to `gov.register({ id })`. Pass the same value
    * on every process start so registration re-binds to the existing agent row
@@ -77,6 +77,14 @@ export interface AdapterConfig extends OutcomeCallbacks {
   toolFieldExtraction?: ToolFieldExtractionRegistry;
 }
 
+/**
+ * The common case: a config that is also the outcome-callback bag, which is
+ * how most adapters are shaped. Adapters whose callbacks take a richer object
+ * than a tool name (the Mastra processor hands back a tool-call record) use
+ * `AdapterCoreConfig` and handle outcomes themselves.
+ */
+export interface AdapterConfig extends AdapterCoreConfig, OutcomeCallbacks {}
+
 /** Extra per-call inputs an adapter can supply when building a context. */
 export interface CallContext {
   tool?: string;
@@ -86,6 +94,14 @@ export interface CallContext {
   outputText?: string;
   metadata?: Record<string, unknown>;
   organizationId?: string;
+  /**
+   * Provenance marks for this call, when the adapter tracks them at a finer
+   * scope than the core's per-session list. The Mastra processor does: it
+   * keeps marks in Mastra's per-request processor state, which is exactly the
+   * scope provenance should have. Supplying this replaces the session marks
+   * for this context rather than merging with them.
+   */
+  taint?: TaintMark[];
 }
 
 export interface AdapterCore {
@@ -126,7 +142,7 @@ export interface AdapterCore {
 }
 
 /** Build the registration payload an adapter sends to `gov.register()`. */
-export function buildRegistration(config: AdapterConfig, tools: string[], framework: AgentFramework): AgentRegistration {
+export function buildRegistration(config: AdapterCoreConfig, tools: string[], framework: AgentFramework): AgentRegistration {
   return {
     id: config.agentId,
     name: config.agentName,
@@ -150,6 +166,13 @@ export interface CreateAdapterCoreOptions {
   tools?: string[];
   /** Framework to record when the config does not name one. */
   framework: AgentFramework;
+  /**
+   * Applied by `core.enforce()` — throwing on block and require_approval, as
+   * adapters have always done. Adapters whose config is itself the callback
+   * bag pass `callbacks: config`; adapters that handle outcomes themselves
+   * (the Mastra processor aborts the run instead of throwing) pass nothing.
+   */
+  callbacks?: OutcomeCallbacks;
 }
 
 /**
@@ -160,7 +183,7 @@ export interface CreateAdapterCoreOptions {
  */
 export async function createAdapterCore(
   governance: GovernanceInstance,
-  config: AdapterConfig,
+  config: AdapterCoreConfig,
   opts: CreateAdapterCoreOptions,
 ): Promise<AdapterCore> {
   const registration = buildRegistration(config, opts.tools ?? [], opts.framework);
@@ -169,6 +192,7 @@ export async function createAdapterCore(
     agentId: registered.id,
     agentLevel: registered.level,
     score: registered.score,
+    ...(opts.callbacks ? { callbacks: opts.callbacks } : {}),
   });
 }
 
@@ -178,14 +202,20 @@ export async function createAdapterCore(
  */
 export function attachAdapterCore(
   governance: GovernanceInstance,
-  config: AdapterConfig,
-  identity: { agentId: string; agentLevel?: number; score?: number },
+  config: AdapterCoreConfig,
+  identity: { agentId: string; agentLevel?: number; score?: number; callbacks?: OutcomeCallbacks },
 ): AdapterCore {
   const agentId = identity.agentId;
   const agentLevel = identity.agentLevel ?? 0;
   const score = identity.score ?? 0;
   const trackTaint = config.trackTaint !== false;
   let marks: TaintMark[] = [];
+
+  /** Caller-supplied marks win over the session list; see CallContext.taint. */
+  function taintFor(call: CallContext): TaintMark[] {
+    if (call.taint) return [...call.taint];
+    return trackTaint && marks.length > 0 ? [...marks] : [];
+  }
 
   function context(call: CallContext): EnforcementContext {
     const tool = call.tool;
@@ -204,7 +234,7 @@ export function attachAdapterCore(
       ...(fields.targetPath !== undefined ? { targetPath: fields.targetPath } : {}),
       ...(fields.targetUrl !== undefined ? { targetUrl: fields.targetUrl } : {}),
       ...(tier !== undefined ? { actionTier: tier } : {}),
-      ...(trackTaint && marks.length > 0 ? { taint: [...marks] } : {}),
+      ...(taintFor(call).length > 0 ? { taint: taintFor(call) } : {}),
       ...(call.organizationId !== undefined ? { organizationId: call.organizationId } : {}),
       ...(metadata !== undefined ? { metadata } : {}),
       sessionTokensUsed: config.sessionTokenTracker?.(),
@@ -217,7 +247,7 @@ export function attachAdapterCore(
     call: CallContext = {},
   ): Promise<EnforcementDecision> {
     const decision = await governance.enforce(context({ ...call, tool: toolName, input }));
-    handleOutcome(decision, toolName, config);
+    if (identity.callbacks) handleOutcome(decision, toolName, identity.callbacks);
     return decision;
   }
 
