@@ -1,11 +1,17 @@
 # Changelog
 
-## [Unreleased] — Kernel hardening, fail-closed defaults, tiers and provenance
+## [0.22.0] - 2026-09-04 — Kernel hardening, fail-closed defaults, tiers and provenance
 
 Closes the four high-severity findings from the September 2026 review and the
 medium ones behind them, then adds the controls the roadmap's second block
 asked for. Every guarantee below is asserted by a named test; see
-`docs/guarantees.md`. Not published to npm yet.
+`docs/guarantees.md`.
+
+Released on GitHub (tag `v0.22.0`); **npm publishing is paused**, so the
+registry still serves 0.20.0. 0.21.0 was never tagged or published on its own
+and is superseded by this release, which contains it. See *Releasing* in
+CONTRIBUTING.md for how versions are cut and how npm publishing is switched
+back on.
 
 ### Security
 

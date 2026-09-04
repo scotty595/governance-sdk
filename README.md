@@ -9,7 +9,7 @@
 [![types](https://img.shields.io/npm/types/governance-sdk)](https://www.npmjs.com/package/governance-sdk)
 [![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
-> **Try it in 30 seconds, no signup, no API key:** `npx governance-sdk demo` — or `git clone`, `npm install`, `npm run demo`. Details under [Try it](#try-it-no-signup-no-api-key).
+> **Try it in 30 seconds, no signup, no API key:** `git clone`, `npm install`, `npm run demo` — or `npx governance-sdk demo` once a 0.21.0+ build is on npm (the registry currently serves 0.20.0; npm publishing is paused while releases continue on GitHub). Details under [Try it](#try-it-no-signup-no-api-key).
 >
 > **Provenance.** governance-sdk was created by [Scott Waddell](https://github.com/scotty595) at [Lua](https://heylua.ai), where it was published from `lua-ai-global/governance` through v0.20.0. From v0.21.0 it is maintained and extended independently in this repository by its original author. The MIT license and Lua's copyright notice on the original work are preserved in [LICENSE](./LICENSE).
 
@@ -142,11 +142,12 @@ is exactly what it does and does not do:
 ### Try it (no signup, no API key)
 
 ```bash
-npx governance-sdk demo      # from npm (v0.21.0+)
-
-# or from a clone
+# from a clone (works today)
 git clone https://github.com/scotty595/governance-sdk.git
 cd governance-sdk && npm install && npm run demo
+
+# from npm, once a 0.21.0+ build is published there (npm currently has 0.20.0)
+npx governance-sdk demo
 ```
 
 The demo itself makes no network calls and writes nothing to disk (the clone path builds `dist/` first), and finishes in under a second:
